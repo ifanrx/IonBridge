@@ -1,0 +1,101 @@
+menu "Firmware Configuration"
+
+config FIRMWARE_DOWNLOAD_ENDPOINT
+    string "Firmware download endpoint"
+    default ""
+    help
+        Firmware download endpoint
+
+config FIRMWARE_DOWNLOAD_RECV_TIMEOUT
+    int "Firmware download receive timeout (ms)"
+    default 30000
+    range 1000 60000
+    help
+        Firmware download receive timeout
+
+config SKIP_DOWNLOAD_ENDPOINT_COMMON_NAME_CHECK
+    bool "Skip common name check for download endpoint"
+    default n
+    help
+        Skip common name check for download endpoint
+
+config FIRMWARE_DOWNLOAD_RECV_BUFFER_SIZE
+    int "Firmware download receive buffer size (bytes)"
+    default 512
+    range 128 4096
+    help
+        Firmware download receive buffer size
+
+config FIRMWARE_DOWNLOAD_TASK_STACK_SIZE
+    int "Firmware download task stack size (bytes)"
+    default 8192
+    range 1024 32768
+    help
+        Firmware download task stack size
+
+config FIRMWARE_DOWNLOAD_TASK_PRIORITY
+    int "Firmware download task priority"
+    default 5
+    range 0 10
+    help
+        Firmware download task priority
+
+config FIRMWARE_DOWNLOAD_DATA_BUFFER_SIZE
+    int "Firmware download data buffer size (bytes)"
+    default 512
+    range 128 4096
+    help
+        Firmware download data buffer size, must be multiple of 16.
+
+config UPGRADE_TASK_STACK_SIZE
+    int "Upgrade task stack size (bytes)"
+    default 8192
+    range 1024 32768
+    help
+        Upgrade task stack size
+
+config UPGRADE_TASK_PRIORITY
+    int "Upgrade task priority"
+    default 5
+    range 0 10
+    help
+        Upgrade task priority
+
+endmenu
+
+menu "HTTPS OTA Configuration"
+
+config OTA_RECV_TIMEOUT
+    int "HTTPS OTA Receive Timeout(ms)"
+    default 30000
+    help
+        Timeout for OTA receive in ms.
+
+config SKIP_COMMON_NAME_CHECK
+    bool "Skip Common Name Check"
+    default n
+    help
+        Skip Common Name Check
+
+config ENABLE_PARTIAL_HTTP_DOWNLOAD
+    bool "Enable partial HTTP download"
+    default n
+    help
+        This enables use of Range header in esp_https_ota component.
+        Firmware image will be downloaded over multiple HTTP requests.
+
+config HTTP_REQUEST_SIZE
+    int "HTTP request size"
+    default MBEDTLS_SSL_IN_CONTENT_LEN
+    depends on ENABLE_PARTIAL_HTTP_DOWNLOAD
+    help
+        This option specifies HTTP request size. Number of bytes specified
+        in this option will be downloaded in single HTTP request.
+
+config OTA_REBOOT_DELAY_MS
+    int "After OTA update, reboot delay (ms)"
+    default 5000
+    help
+        Delay in ms after OTA update to reboot
+
+endmenu

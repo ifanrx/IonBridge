@@ -1,0 +1,57 @@
+menu "Global Logging Settings"
+
+config ENABLE_GLOBAL_LOGGING_COLLECTOR
+    bool "Enable Global Logging Collector"
+    default n
+    help
+        Enable the global logging collector. The global logging collector
+        is a daemon that collects logs from all the logging sources in the
+        system and forwards them to the logging sink.
+
+config ENABLE_REPORT_SYSLOG
+    bool "Enable Report Syslog"
+    depends on ENABLE_GLOBAL_LOGGING_COLLECTOR
+    default n
+    help
+        Enable report log to syslog. Both ENABLE_GLOBAL_LOGGING_COLLECTOR and
+        ENABLE_REPORT_SYSLOG options must be enabled for the feature to be
+        active.
+
+config SYSLOG_HOST
+    string "Syslog host"
+    depends on ENABLE_REPORT_SYSLOG
+    default "172.25.16.125"
+    help
+        The host of the syslog report.
+
+config SYSLOG_HOST_FALLBACK_IP
+    string "Syslog host fallback ip"
+    depends on ENABLE_REPORT_SYSLOG
+    default "120.232.156.194"
+    help
+        The host of the syslog report.
+
+config SYSLOG_PORT
+    int "Syslog port"
+    depends on ENABLE_REPORT_SYSLOG
+    default 1515
+    help
+        The port of the syslog report.
+
+config SYSLOG_SEMAPHORE_TIMEOUT_MS
+    int "Syslog semaphore timeout (ms)"
+    depends on ENABLE_REPORT_SYSLOG
+    default 1000
+    help
+        The timeout of the semaphore used to prevent multiple threads from sending
+        logs to the same syslog server simultaneously.
+
+config ENABLE_LOG_STDOUT
+    bool "Enable log stdout"
+    depends on ENABLE_GLOBAL_LOGGING_COLLECTOR
+    default n
+    help
+        This configuration option enables logging output to the standard output (stdout).
+        When enabled, all log messages will be printed to the terminal or console where the program is running.
+
+endmenu

@@ -1,0 +1,9 @@
+idf_component_register(
+  SRCS
+  "fpga.cpp"
+  INCLUDE_DIRS
+  "include"
+  PRIV_REQUIRES
+  driver
+  storage
+  utils)

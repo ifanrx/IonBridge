@@ -1,0 +1,17 @@
+{
+    "version": "0.6.42",
+    "release_date": 2025010711,
+    "git_commit": "dfe92fb892533bb4c83ecae667a9f65d558b57f3",
+    "sw3566": {
+        "numeric": 2025010606,
+        "version": "0.2.48",
+        "checksum": "176eea3f83195d9b8b874438f7f3f84313fd4227"
+    },
+    "fpga": {
+        "numeric": 2024122719,
+        "version": "0.2.7"
+    },
+    "zrlib": {
+        "version": "1.6.7"
+    }
+}

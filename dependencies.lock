@@ -1,0 +1,42 @@
+dependencies:
+  esp_nimble_cpp:
+    component_hash: e5355b2a8ea73b1298ea7a20030c50a765b7caff656fb2ce01f314754114e250
+    dependencies:
+    - name: espressif/esp_hosted
+      rules:
+      - if: target in [esp32p4]
+      version: '*'
+    - name: espressif/esp_wifi_remote
+      rules:
+      - if: target in [esp32p4]
+      version: '*'
+    - name: idf
+      rules:
+      - if: target in [esp32p4]
+      version: '>=5.3.0'
+    source:
+      git: https://github.com/h2zero/esp-nimble-cpp
+      path: .
+      type: git
+    version: b50a1b50b1a66e872e7d3dbff653e20f9a40e102
+  idf:
+    source:
+      type: idf
+    version: 5.3.2
+  joltwallet/littlefs:
+    component_hash: 362f1f5beb5087b0c60169aff82676d2d0ffc991ead975212b0cba95959181c5
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=4.3'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.14.8
+direct_dependencies:
+- esp_nimble_cpp
+- idf
+- joltwallet/littlefs
+manifest_hash: 2f26a7707ce59a9f17589a4f0b6b9ecf4380cd40217b390b99c8a76ced6d3be6
+target: esp32c3
+version: 2.0.0

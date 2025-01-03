@@ -1,0 +1,183 @@
+menu "Wi-Fi Configuration"
+
+config ENABLE_WEB_SERVER
+    bool "Enable Web Server"
+    default n
+    help
+        Enable Web Server.
+
+config IONBRIDGE_WIFI_MAX_TX_POWER
+    int "Max TX power"
+    range 8 84
+    default 34
+    help
+        See esp_wifi_set_max_tx_power
+
+config IONBRIDGE_WIFI_DEFAULT_SSID
+    string "Default Wi-Fi SSID"
+    default ""
+    help
+        The default Wi-Fi SSID to use when connecting to an AP.
+
+config IONBRIDGE_WIFI_DEFAULT_PASSWORD
+    string "Default Wi-Fi Password"
+    default ""
+    help
+        The default Wi-Fi password to use when connecting to an AP.
+
+config ESP_WIFI_SCAN_LIST_SIZE
+    int "Max size of scan list"
+    range 0 20
+    default 16
+    help
+        The size of array that will be used to retrieve the list of access points.
+
+config ESP_WIFI_STA_START_TIMEOUT
+    int "Wi-Fi Station start Timeout (in milliseconds)"
+    default 30000
+    help
+        This option specifies the timeout for waiting for the Wi-Fi station to start.
+
+config ESP_WIFI_STA_MAXIMUM_RETRY
+    int "Maximum retry"
+    default 2
+    help
+        Set the maximum retry value to prevent the station from continuously
+        attempting to reconnect to the Access Point (AP) when the AP doesn't exist.
+
+choice ESP_WIFI_SAE_MODE
+    prompt "WPA3 SAE mode selection"
+    default ESP_WPA3_SAE_PWE_BOTH
+    help
+        Select mode for SAE as Hunt and Peck, H2E or both.
+    config ESP_WPA3_SAE_PWE_HUNT_AND_PECK
+        bool "HUNT AND PECK"
+    config ESP_WPA3_SAE_PWE_HASH_TO_ELEMENT
+        bool "H2E"
+    config ESP_WPA3_SAE_PWE_BOTH
+        bool "BOTH"
+endchoice
+
+config ESP_WIFI_PW_ID
+    string "PASSWORD IDENTIFIER"
+    depends on  ESP_WPA3_SAE_PWE_HASH_TO_ELEMENT|| ESP_WPA3_SAE_PWE_BOTH
+    default ""
+    help
+        password identifier for SAE H2E
+
+choice ESP_WIFI_SCAN_AUTH_MODE_THRESHOLD
+    prompt "WiFi Scan auth mode threshold"
+    default ESP_WIFI_AUTH_OPEN
+    help
+        The weakest authmode to accept in the scan mode.
+        This value defaults to ESP_WIFI_AUTH_WPA2_PSK in case password is present and ESP_WIFI_AUTH_OPEN is used.
+        Please select ESP_WIFI_AUTH_WEP/ESP_WIFI_AUTH_WPA_PSK in case AP is operating in WEP/WPA mode.
+
+    config ESP_WIFI_AUTH_OPEN
+        bool "OPEN"
+    config ESP_WIFI_AUTH_WEP
+        bool "WEP"
+    config ESP_WIFI_AUTH_WPA_PSK
+        bool "WPA PSK"
+    config ESP_WIFI_AUTH_WPA2_PSK
+        bool "WPA2 PSK"
+    config ESP_WIFI_AUTH_WPA_WPA2_PSK
+        bool "WPA/WPA2 PSK"
+    config ESP_WIFI_AUTH_WPA3_PSK
+        bool "WPA3 PSK"
+    config ESP_WIFI_AUTH_WPA2_WPA3_PSK
+        bool "WPA2/WPA3 PSK"
+    config ESP_WIFI_AUTH_WAPI_PSK
+        bool "WAPI PSK"
+endchoice
+
+config SNTP_TIME_SERVER
+    string "SNTP Server name"
+    default "cn.pool.ntp.org"
+    help
+        Hostname of the main SNTP server.
+
+choice SNTP_TIME_SYNC_METHOD
+    prompt "Time synchronization method"
+    default SNTP_TIME_SYNC_METHOD_IMMED
+    help
+        Select the method to synchronize the time.
+
+    config SNTP_TIME_SYNC_METHOD_IMMED
+        bool "update time immediately when received"
+    config SNTP_TIME_SYNC_METHOD_SMOOTH
+        bool "update time with smooth method (adjtime)"
+    config SNTP_TIME_SYNC_METHOD_CUSTOM
+        bool "custom implementation"
+endchoice
+
+config WIFI_RSSI_LOG_TIMER_INTERVAL
+    int "RSSI log timer interval (in seconds)"
+    default 60
+    help
+        The interval in seconds to log the RSSI value of the Wi-Fi connection.
+
+config DEFAULT_WIFI_CONNECTION_DELAY
+    int "Default wifi connection delay (in seconds)"
+    default 180
+    help
+        Specifies the amount of time the system waits before attempting to connect to a default WiFi network.
+
+config WIFI_RECORD_COUNT
+    int "Number of Wi-Fi Records to Save"
+    default 2
+    help
+        Specifies the number of Wi-Fi connection records to store. Each record includes SSID and password.
+
+config WIFI_RECONNECT_INTERVAL_MS
+    int "WiFi Reconnect Timer Interval (ms)"
+    default 30000
+    help
+      Timer interval in milliseconds before attempting to reconnect to WiFi.
+      You can adjust this value to control how frequently the system retries
+      connecting to WiFi after a disconnect.
+
+config GENERATE_204_URL_DOMESTIC
+    string "GENERATE 204 URL DOMESTIC"
+    default "http://wifi.vivo.com.cn/generate_204"
+    help
+        The URL of generate_204 service.
+
+config GENERATE_204_URL_DOMESTIC_BACKUP
+    string "GENERATE 204 URL DOMESTIC BACKUP"
+    default "http://connect.rom.miui.com/generate_204"
+    help
+        The URL of generate_204 service.
+
+config GENERATE_204_URL_GLOBAL
+    string "GENERATE 204 URL GLOBAL"
+    default "http://www.gstatic.com/generate_204"
+    help
+        The URL of generate_204 service.
+
+config GENERATE_204_URL_GLOBAL_BACKUP
+    string "GENERATE 204 URL GLOBAL BACKUP"
+    default "http://captive.apple.com/generate_204"
+    help
+        The URL of generate_204 service.
+
+config MQTT_FALLBACK_IP
+    string "MQTT Fallback IP Address"
+    default ""
+    help
+        Fallback IP address for the MQTT services
+
+config WIFI_RECONNECT_LOOP_INTERVAL_MS
+    int "WiFi Reconnect Loop Timer Interval (ms)"
+    default 300000
+    help
+        Timer interval in milliseconds before attempting to next reconnect loop.
+
+config DISPLAY_FLASH_INTERVAL_MS
+    int "Display Flash Interval (ms)"
+    default 300
+    help
+        This setting determines how frequently the display switches between on and off states during flashing sequences. 
+        Flashing is typically used to indicate statuses such as ongoing Wi-Fi reconnection attempts.
+
+endmenu

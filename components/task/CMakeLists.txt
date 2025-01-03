@@ -1,0 +1,23 @@
+file(GLOB SRCS_FILES *.cpp)
+idf_component_register(
+  SRCS
+  ${SRCS_FILES}
+  INCLUDE_DIRS
+  "include"
+  REQUIRES
+  controller
+  mqtt_app
+  version
+  PRIV_REQUIRES
+  app
+  app_update
+  ble
+  esp_timer
+  esp_wifi
+  littlefs
+  nvs_data
+  power
+  rpc
+  service
+  uart
+  wifi)

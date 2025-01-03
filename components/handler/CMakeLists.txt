@@ -1,0 +1,19 @@
+file(GLOB SRCS_FILES *.cpp)
+idf_component_register(
+  SRCS
+  ${SRCS_FILES}
+  INCLUDE_DIRS
+  "include"
+  REQUIRES
+  app
+  PRIV_REQUIRES
+  animation
+  ble
+  efuse
+  esp_http_client
+  esp_wifi
+  firmware
+  logging
+  nvs_data
+  task
+  wifi)

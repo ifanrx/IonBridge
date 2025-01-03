@@ -1,0 +1,223 @@
+menu "IonBridge Configuration"
+
+config WATCHDOG_TIMEOUT
+    int "Watchdog Timeout (ms)"
+    default 120000
+    help
+        Timeout for the watchdog timer in milliseconds.
+        This value should be greater than the value set for OTA_CONFIRM_TIMEOUT.
+
+comment "ESP32 Firmware Version is set to follow the project version. Change Project Version to modify it."
+
+config ESP32_API_LEVEL
+    int "ESP32 API Level"
+    default 1
+    help
+        ESP32 API Level
+
+config SW3566_FIRMWARE_NUMERIC_VERSION
+    int "SW3566 Firmware Numeric Version"
+    default 1
+    depends on MCU_MODEL_SW3566 || MCU_MODEL_FAKE_SW3566
+    help
+        SW3566 Firmware Numeric Version
+
+        This numeric version should be incremented with each release.
+        It is used to track the numeric progress of the firmware versions.
+
+config SW3566_FIRMWARE_SEMVER
+    string "SW3566 Firmware Version"
+    default "0.0.1"
+    depends on MCU_MODEL_SW3566 || MCU_MODEL_FAKE_SW3566
+    help
+        SW3566 Firmware Version
+
+        This version follows Semantic Versioning (semver).
+        Note: The semantic version should be updated whenever the numeric version changes.
+        Please ensure that this version reflects the corresponding changes in the numeric version.
+
+config SW3566_FIRMWARE_CHECKSUM
+    string "SW3566 Firmware Checksum (hex)"
+    default "5aa406bde90454f77ac72ff8e6ae4ac002f098dd"
+    depends on MCU_MODEL_SW3566 || MCU_MODEL_FAKE_SW3566
+    help
+        SW3566 Firmware Checksum
+
+config FPGA_FIRMWARE_NUMERIC_VERSION
+    int "FPGA Firmware Numeric Version"
+    default 1
+    depends on MCU_MODEL_SW3566 || MCU_MODEL_FAKE_SW3566
+    help
+        FPGA Firmware Numeric Version
+
+        This numeric version should be incremented with each release.
+        It is used to track the numeric progress of the firmware versions.
+
+config FPGA_FIRMWARE_SEMVER
+    string "FPGA Firmware Semantic Version"
+    default "0.0.1"
+    depends on MCU_MODEL_SW3566 || MCU_MODEL_FAKE_SW3566
+    help
+        FPGA Firmware Version (Semantic Versioning)
+
+        This version follows Semantic Versioning (semver).
+        Note: The semantic version should be updated whenever the numeric version changes.
+        Please ensure that this version reflects the corresponding changes in the numeric version.
+
+config ZRLIB_SEMVER
+    string "ZR Library Semantic Version"
+    default "0.0.1"
+    depends on MCU_MODEL_SW3566 || MCU_MODEL_FAKE_SW3566
+    help
+        ZR Library Version (Semantic Versioning)
+
+        This version follows Semantic Versioning (semver).
+        Note: The SW3566 firmware semantic version should be updated whenever the ZRLib version is upgraded.
+        Please ensure that this version is kept consistent with the SW3566 version.
+
+config ENABLE_FPGA_POWER_CTRL
+    bool "Enable FPGA Power Control"
+    default n
+    depends on MCU_MODEL_SW3566 || MCU_MODEL_FAKE_SW3566
+    help
+        Enable FPGA Power Control.
+        Note: The FPGA power control parameters are measured for the actual ACDC.
+
+config ENABLE_FPGA_ADC_MONITOR
+    bool "Enable FPGA ADC Monitor"
+    default n
+    depends on MCU_MODEL_SW3566 || MCU_MODEL_FAKE_SW3566
+    help
+        Enable FPGA ADC Monitor.
+
+config ENABLE_RFTEST
+    bool "Enable rftest"
+    default n
+    help
+        Enable rftest.
+
+config ANIMATION_FRAME_RATE
+    int "Animation frame rate"
+    default 6
+    range 1 30
+    help
+        Animation frame rate(frame per second)
+
+config ENABLE_HW_REVISION_MODIFICATION
+    bool "Enable Hardware Revision Modification"
+    default n
+    help
+        Enable modification of the hardware revision for the PCB.
+        Note: Enabling this allows you to specify a new hardware revision.
+
+config HW_REVISION_VALUE
+    string "Specify Hardware Revision Value"
+    depends on ENABLE_HW_REVISION_MODIFICATION
+    default ""
+    help
+        Specify the new hardware revision value for the PCB (max length: 7 characters).
+        Note: Leave blank to retain the current hardware revision.
+
+config ENABLE_PRODUCT_FAMILY_MODIFICATION
+    bool "Enable Product Family Modification"
+    default y
+    help
+        Enable modification of the product family for the PCB.
+        Note: Enabling this allows you to specify a new product family.
+
+config PRODUCT_FAMILY_VALUE
+    string "Specify product family Value"
+    depends on ENABLE_PRODUCT_FAMILY_MODIFICATION
+    default "CP02"
+    help
+        Specify the new product family value for the PCB (max length: 7 characters).
+        Note: Leave blank to retain the current product family.
+
+config ENABLE_DEVICE_MODEL_MODIFICATION
+    bool "Enable Device Model Modification"
+    default n
+    help
+        Enable modification of the device model for the PCB.
+        Note: Enabling this allows you to specify a new device model.
+
+config DEVICE_MODEL_VALUE
+    string "Specify Device Model Value"
+    depends on ENABLE_DEVICE_MODEL_MODIFICATION
+    default ""
+    help
+        Specify the new device model value for the PCB (max length: 7 characters).
+
+# Master switch to enable all ports
+config ALL_PORTS_ENABLED
+    bool "Enable All Ports"
+    default y
+    help
+      Enable all ports simultaneously. If disabled, you can individually enable or disable each port.
+
+if !ALL_PORTS_ENABLED
+
+    # Individual port options
+    config PORT_0_ENABLED
+        bool "Enable Port 0"
+        default y
+        help
+          Enable or disable Port 0.
+
+    config PORT_1_ENABLED
+        bool "Enable Port 1"
+        default y
+        help
+          Enable or disable Port 1.
+
+    config PORT_2_ENABLED
+        bool "Enable Port 2"
+        default y
+        help
+          Enable or disable Port 2.
+
+    config PORT_3_ENABLED
+        bool "Enable Port 3"
+        default y
+        help
+          Enable or disable Port 3.
+
+    config PORT_4_ENABLED
+        bool "Enable Port 4"
+        default y
+        help
+          Enable or disable Port 4.
+
+endif
+
+config ENABLE_RESTART_MQTT_CLIENT
+    bool "Enable Restart MQTT Client at low memory"
+    default n
+    help
+        Enable restarting the MQTT client at low memory.
+
+config SKIP_3566_UPGRADE
+    bool "Skip 3566 Upgrade"
+    default n
+    depends on MCU_MODEL_SW3566
+    help
+        Skip 3566 upgrade.
+
+config ENABLE_POWER_ALLOCATOR
+    bool "Enable Power Allocator"
+    default y
+    help
+        Enable power allocator.
+
+config ENABLE_TEMP_MONITOR
+    bool "Enable Temperature Monitor"
+    default y
+    help
+        Enable temperature monitor.
+
+config ENABLE_AUTO_STREAM_DATA
+    bool "Enable Auto Stream Data"
+    default n
+    help
+        Enable auto stream data.
+
+endmenu

@@ -1,0 +1,8 @@
+absl-py
+anyio
+asyncclick
+bleak
+boto3
+rangehttpserver
+littlefs-python==0.10.3
+paho-mqtt

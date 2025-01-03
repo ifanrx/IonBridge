@@ -1,0 +1,83 @@
+LICENSE
+-------
+
+This project is licensed under a dual license scheme. You may choose either of
+the following licenses to govern your use of the project, depending on your
+intended purpose.
+
+1. CERN Open Hardware Licence Version 2 - Strongly Reciprocal (Non-Commercial Use)
+
+For non-commercial purposes (as defined in 1.1), this project is licensed under
+the CERN Open Hardware Licence Version 2 - Strongly Reciprocal ("CERN OHL v2").
+This license ensures that any modifications or derived works are shared under
+the same terms, promoting collaboration and openness within the community.
+
+You can view the full text of the CERN OHL v2 at cern_ohl_s_v2.txt
+
+1.1 Exclusions
+
+The CERN OHL v2 does not apply to:
+
+*  Projects that involve manufacturing more than 100 units of hardware for a
+   specific model (or similar models), or 1000 units for the same vendor in
+   aggregation.
+*  Projects intended for for-profit purposes.
+
+2. Custom License (Commercial Use)
+
+For business and commercial purposes, a separate Custom License is required.
+This license allows for the use, modification, and distribution of the project
+in commercial products and services without the reciprocal obligations of the
+CERN OHL v2.
+
+To obtain a Commercial License under the Custom License, please contact:
+
+ifanr Inc.
+https://www.ifanr.com
+
+Choosing a License
+------------------
+
+- Non-Commercial Use: Select the CERN OHL v2 to comply with open hardware
+  principles and contribute back to the community.
+- Commercial Use: Obtain the Custom License to integrate the project into
+  your business offerings.
+
+By using this project, you agree to abide by the terms of the selected license.
+
+许可证
+------
+
+本项目采用双重许可模式。您可以根据您的预期用途选择以下任意一种许可来规范您对本项目的使用。
+
+1. CERN 开放硬件许可协议版本 2 - 强制互惠（非商业用途）
+
+对于非商业目的（定义见 1.1），本项目采用 CERN 开放硬件许可协议版本 2 - 强制互惠
+（简称“CERN OHL v2”）。该许可确保任何修改或派生作品在相同条款下共享，促进社区内部的协作与开放。
+
+您可以在 cern_ohl_s_v2.txt 查阅 CERN OHL v2 的完整文本。
+
+1.1 排除情况
+
+CERN OHL v2 不适用于：
+
+* 涉及制造超过 100 个特定型号（或类似型号）硬件的项目，或同一供应商制造超过 1000 个硬件的项目。
+* 旨在营利的项目。
+
+2. 定制许可（商业用途）
+
+对于商业和营利目的，需要一个单独的定制许可。
+该许可允许在商业产品和服务中使用、修改和分发本项目，而无需遵循 CERN OHL v2 的互惠义务。
+
+如需根据定制许可获得商业许可，请联系：
+
+ifanr Inc.  
+https://www.ifanr.com
+
+选择许可
+--------
+
+- 非商业用途：选择 CERN OHL v2 以遵守开放硬件原则并回馈社区。
+- 商业用途：获取定制许可以将本项目整合到您的商业产品中。
+
+使用本项目即表示您同意遵守所选择许可的条款。

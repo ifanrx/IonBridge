@@ -1,0 +1,88 @@
+if ENABLE_MQTT
+
+menu "Telemetry Task Configuration"
+
+config TELEMETRY_ENABLED
+    bool "Enable Telemetry Reporting"
+    default y
+    help
+        Enable or disable telemetry reporting. If enabled, the timer task will
+        report telemetry data at each interval.
+
+config TELEMETRY_INTERVAL
+    int "Timer Interval (ms)"
+    depends on TELEMETRY_ENABLED
+    default 3600000
+    range 1000 3600000
+    help
+        Set the timer interval in milliseconds. This value determines the interval
+        at which the timer will trigger. The default value is 3600000 ms (1 hour).
+        The value must be between 1000 ms and 3600000 ms (1 hour).
+
+config UART_METRICS_INTERVAL
+    int "Timer Interval (ms)"
+    depends on TELEMETRY_ENABLED
+    default 60000
+    range 1000 3600000
+    help
+        Set the timer interval in milliseconds. This value determines the interval
+        at which the timer will trigger. The default value is 60000 ms (60 s).
+
+config TELEMETRY_SYSTEM_STATE_ENABLED
+    bool "Enable System State Telemetry Reporting"
+    depends on TELEMETRY_ENABLED
+    default y
+    help
+        If enabled, the timer task will collect and report task statistics at each interval.
+
+config ALERT_CHECK_INTERVAL
+    int "Alert Check Interval (ms)"
+    depends on TELEMETRY_ENABLED
+    default 1000
+    range 10 3600000
+    help
+        Set the timer interval in milliseconds.
+
+config MEMORY_ALERT_THRESHOLD_BYTES
+    int "Memory Alert Threshold (bytes)"
+    depends on TELEMETRY_ENABLED
+    default 10240
+    range 1024 409600
+    help
+        Specifies the memory usage threshold in bytes that triggers an alert.
+        This setting helps in monitoring system memory and triggering actions
+        or alerts when the free memory drops below this threshold. The minimum
+        value is 1024 bytes and the maximum is 409600 bytes. Adjust this setting
+        based on expected system load and total available memory.
+
+config TEMPERATURE_ALERT_THRESHOLD
+    int "Temperature Alert Threshold"
+    depends on TELEMETRY_ENABLED
+    default 0
+    help
+        Specifies the temperature threshold that triggers an alert.
+
+config STREAM_PORTS_STATUS_INTERVAL_MS
+    int "Stream Ports Status Interval (ms)"
+    depends on TELEMETRY_ENABLED
+    default 300
+    help
+        Set the interval in milliseconds for reporting the status of stream ports.
+
+config STREAM_DEVICE_STATUS_INTERVAL_MS
+    int "Stream Device Status Interval (ms)"
+    depends on TELEMETRY_ENABLED
+    default 3000
+    help
+        Set the interval in milliseconds for reporting the status of stream devices.
+
+config STREAM_PD_STATUS_INTERVAL_MS
+    int "Stream PD Status Interval (ms)"
+    depends on TELEMETRY_ENABLED
+    default 15000
+    help
+        Set the interval in milliseconds for reporting the status of stream PD.
+
+endmenu
+
+endif

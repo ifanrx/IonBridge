@@ -1,0 +1,20 @@
+file(GLOB SRCS_FILES *.cpp)
+idf_component_register(
+  SRCS
+  ${SRCS_FILES}
+  INCLUDE_DIRS
+  "include"
+  PRIV_REQUIRES
+  animation
+  app
+  ble
+  controller
+  esp_event
+  esp_http_client
+  esp_wifi
+  logging
+  lwip
+  mqtt_app
+  nvs_data
+  utils
+  web_server)

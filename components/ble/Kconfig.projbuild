@@ -1,0 +1,89 @@
+# Kconfig
+
+menu "NimBLE Configuration"
+
+config SERVICE_UUID
+    string "Service UUID"
+    default "048e3f2e-e1a6-4707-9e74-a930e898a1ea"
+    help
+        The UUID for the service.
+
+config CHARACTERISTIC_UUID_TX
+    string "Characteristic UUID TX"
+    default "148e3f2e-e1a6-4707-9e74-a930e898a1ea"
+    help
+        The UUID for the TX characteristic.
+
+config CHARACTERISTIC_UUID_RX
+    string "Characteristic UUID RX"
+    default "248e3f2e-e1a6-4707-9e74-a930e898a1ea"
+    help
+        The UUID for the RX characteristic.
+
+config BLE_TASK_STACK_SIZE
+    int "BLE Task Stack Size"
+    default 4096
+    range 3072 8192
+    help
+        Define the stack size of BLE task.
+
+config BLE_ATT_MTU
+    int "BLE ATT Maximum Transmission Unit"
+    default 527
+    range 23 527
+    help
+        Define the maximum size of payload bytes that can be sent in a single
+        ATT PDU. The valid range is from 23 to 527.
+
+config BLE_DEFAULT_DEVICE_NAME
+    string "BLE Default Device Name"
+    default "CP02-UNINITIALIZED"
+    help
+        The default name for the BLE device. This name will be used as the
+        device identifier in BLE advertisements and connections.
+
+config BLE_PWR_TYPE_ADV
+    int "ESP_BLE_PWR_TYPE_ADV power"
+    default 11
+    range 0 15
+    help
+    esp_power_level_t NimBLEDevice::setPower ESP_BLE_PWR_TYPE_ADV
+
+config BLE_PWR_TYPE_SCAN
+    int "ESP_BLE_PWR_TYPE_SCAN power"
+    default 11
+    range 0 15
+    help
+    esp_power_level_t NimBLEDevice::setPower ESP_BLE_PWR_TYPE_SCAN
+
+config BLE_PWR_TYPE_DEFAULT
+    int "ESP_BLE_PWR_TYPE_DEFAULT power"
+    default 11
+    range 0 15
+    help
+    esp_power_level_t NimBLEDevice::setPower ESP_BLE_PWR_TYPE_DEFAULT
+
+config BLE_ADV_INTERVAL_MS
+    int "BLE Advertising Interval (ms)"
+    default 2000
+    range 2000 65535
+    help
+        The interval at which the device will advertise. The valid range is from
+        2000 to 65535.
+
+config BLE_ADV_TIMER_INTERVAL
+    int "BLE Advertising Timer Interval (seconds)"
+    default 60
+    range 0 65535
+    help
+        The interval at which the device will advertise. The valid range is from
+        0 to 65535.
+
+config BLE_ADV_DURATION_MS
+    int "BLE Advertising Duration (ms)"
+    default 5000
+    range 0 65535
+    help
+        The duration of the advertisement. The valid range is from 0 to 65535.
+
+endmenu

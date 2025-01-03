@@ -1,0 +1,69 @@
+menu "NVS Data Configuration"
+
+# Display Mode Configuration
+choice
+    prompt "Display Mode"
+    default DISPLAY_MODE_POWER_METER
+
+config DISPLAY_MODE_OFF
+    bool "Off"
+    help
+        Set display mode to OFF.
+
+config DISPLAY_MODE_MANUAL
+    bool "Manual"
+    help
+        Set display mode to MANUAL.
+
+config DISPLAY_MODE_POWER_METER
+    bool "Power Meter"
+    help
+        Set display mode to POWER_METER.
+
+endchoice
+
+# Setting to hold the numeric value based on the choice
+config DISPLAY_MODE
+    hex
+    default "0x00" if DISPLAY_MODE_OFF
+    default "0x01" if DISPLAY_ORDER_MANUAL
+    default "0x02" if DISPLAY_MODE_POWER_METER
+    help
+        Numeric value corresponding to the selected display mode.
+
+# Display Intensity Configuration
+config DISPLAY_INTENSITY
+    hex "Display Intensity"
+    default "0x80"
+    range 0x00 0xFF
+    help
+        Set the display intensity. It is an 8-bit value.
+
+config DEFAULT_SYSLOG_REPORTING_ENABLED
+    bool "Default Syslog Reporting Enabled"
+    default y
+    help
+        Default syslog reporting enabled. If true, report to syslog; otherwise, do not report.
+
+config ADC_THRESHOLD_LOW
+    int "ADC Threshold Low"
+    default 70
+    range 0 255
+    help
+        ADC Threshold Low
+
+config ADC_THRESHOLD_HIGH
+    int "ADC Threshold High"
+    default 75
+    range 0 255
+    help
+        ADC Threshold High
+
+config ACTION_DEADZONE
+    int "Action Deadzone"
+    default 128
+    range 0 255
+    help
+        Action Deadzone
+        
+endmenu

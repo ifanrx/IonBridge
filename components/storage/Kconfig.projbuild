@@ -1,0 +1,16 @@
+menu "File System Configuration"
+
+config FILE_SYSTEM_BASE_PATH
+    string "File system base path"
+    default "/littlefs"
+    help
+        The base path for the file system. This should be an absolute path
+        that does not contain any subdirectories.
+
+config TEMP_FOLDER_PATH
+    string "Temp folder path"
+    default "/littlefs/temp"
+    help
+        Path to the temporary folder that will be used by the application.
+
+endmenu

@@ -1,0 +1,170 @@
+menu "Port Configuration"
+
+choice MCU_MODEL
+    prompt "Select Port MCU model"
+    default MCU_MODEL_SW3566
+
+    config MCU_MODEL_SW3566
+        bool "SW3566"
+
+    config MCU_MODEL_SW3526_SW3536
+        bool "SW3526/SW3536"
+
+    config MCU_MODEL_FAKE_SW3566
+        bool "Fake SW3566"
+
+endchoice
+
+if MCU_MODEL_SW3566
+menu "SW3566 Configuration"
+
+config SW3566_COUNT
+    int "Number of SW3566 chips"
+    default 5
+    help
+        Number of SW3566 chips
+
+endmenu
+endif
+
+if MCU_MODEL_SW3526_SW3536
+menu"SW3526/SW3536 Configuration"
+
+config SW3526_COUNT
+    int "Number of SW3526 chips"
+    default 2
+    help
+        Number of SW3526 chips
+
+config SW3536_COUNT
+    int "Number of SW3536 chips"
+    default 3
+    help
+        Number of SW3536 chips
+
+endmenu
+endif
+
+if MCU_MODEL_FAKE_SW3566
+menu "Fake SW3566 Configuration"
+
+config FAKE_SW3566_COUNT
+    int "Number of Fake SW3566 chips"
+    default 5
+    help
+        Number of Fake SW3566 chips
+
+endmenu
+endif
+
+config PORT_TRICKLE_CHARGING_THRESHOLD
+    int "Port Trickle Charging Threshold"
+    range 1 10
+    default 3
+    help
+        Defines the threshold (in watts) for trickle charging on a port. When the
+        port power consumption falls below this threshold, the system will enter
+        trickle charging mode to maintain minimal power flow while avoiding
+        unnecessary power consumption.
+
+config PORT_TEMP_WARNING_THRESHOLD
+    int "Port Temperature Warning Threshold"
+    range 50 80
+    default 70
+    help
+        Defines the temperature (in degrees Celsius) at which the port issues a
+        warning. If the port temperature exceeds this threshold, the system will
+        log a warning to indicate that the port is approaching a critical
+        temperature, allowing for preventive measures.
+
+config PORT_TEMP_ALERT_THRESHOLD
+    int "Port Temperature Alert Threshold"
+    range 75 90
+    default 85
+    help
+        Defines the temperature (in degrees Celsius) at which the port issues an
+        alert. If the port temperature exceeds this threshold, the system will
+        initiate protective measures to reduce power or shut down the port to
+        prevent overheating and damage.
+
+config PORT_TEMP_MAX_THRESHOLD
+    int "Port Maximum Temperature Threshold"
+    range 80 100
+    default 90
+    help
+        Defines the maximum temperature (in degrees Celsius) for the port. If the
+        port temperature exceeds this threshold, the system will immediately
+        shut down the port to prevent permanent damage from overheating.
+
+config PORT_TEMP_COOLDOWN_TIME
+    int "Port Temperature Cooldown Time"
+    range 10 120
+    default 30
+    help
+        Defines the cooldown time (in seconds) after reducing the power on a port due to
+        high temperature. The system will wait for this amount of time before attempting
+        to decrease the power again. This ensures the port has sufficient time to cool
+        down before further adjustments are made.
+
+config PORT_OVER_TEMP_DECREASE
+    int "Power Decrease for Port Over Temperature"
+    range 1 50
+    default 10
+    help
+        Defines the amount (in watts) by which the system will decrease the port's
+        power when the port exceeds the high temperature threshold. This ensures
+        that the port reduces its power consumption to avoid overheating while
+        maintaining safe operating conditions.
+
+config PORT_MANAGER_EVENT_QUEUE_SIZE
+    int "Port Manager Event Queue Size"
+    range 1 100
+    default 20
+    help
+        Defines the size of the event queue for the port manager.
+
+config PORT_MANAGER_TASK_STACK_SIZE
+    int "Port Manager Task Stack Size"
+    range 1536 8192
+    default 2048
+    help
+        Defines the stack size (in bytes) for the port manager task.
+
+config PORT_MANAGER_EVENT_ENQUEUE_TIMEOUT_MS
+    int "Port Manager Event Enqueue Timeout"
+    range 10 1000
+    default 100
+    help
+        Defines the timeout (in milliseconds) for the port manager to wait for
+        the event queue to become available before giving up.
+
+config PORT_MANAGER_EVENT_DEQUEUE_TIMEOUT_MS
+    int "Port Manager Event Dequeue Timeout"
+    range 10 1000
+    default 100
+    help
+        Defines the timeout (in milliseconds) for the port manager to wait for
+        the event queue to have an event before giving up.
+
+config PORT_HISTORICAL_DATA_SIZE
+    int "Port Historical Data Size"
+    range 1 1000
+    default 180
+    help
+        Defines the size (in minutes) of the historical data buffer for each port.
+
+config PORT_HISTORICAL_DATA_SAMPLE_RATE
+    int "Port Historical Data Sample Rate"
+    range 1 120
+    default 10
+    help
+        Defines the sample rate (in seconds) for the historical data buffer for each port.
+
+config PORT_CHECKING_TIMER_MS
+    int "Port Checking Timer Interval (ms)"
+    default 5000
+    help
+      Timer interval in milliseconds for the CHECKING state.
+      The system will send a keep-alive message after this interval if no response is received.
+
+endmenu

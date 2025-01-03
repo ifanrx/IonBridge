@@ -1,0 +1,181 @@
+menu "UART Configuration"
+
+    orsource "$IDF_PATH/examples/common_components/env_caps/$IDF_TARGET/Kconfig.env_caps"
+
+    config UART_PORT_NUM
+        int "UART port number"
+        range 0 2 if IDF_TARGET_ESP32 || IDF_TARGET_ESP32S3
+        default 2 if IDF_TARGET_ESP32 || IDF_TARGET_ESP32S3
+        range 0 1
+        default 2
+        help
+            UART communication port number for the example.
+            See UART documentation for available port numbers.
+
+    config UART_BAUD_RATE
+        int "UART communication speed"
+        range 4800 921600
+        default 115200
+        depends on !FPGA_AS_UART_SWITCH
+        help
+            UART communication speed for Modbus example.
+
+    # Configuration for UART Message Send Attempts
+    config UART_MESSAGE_SEND_ATTEMPTS
+        int "UART Message Send Attempts"
+        range 1 100
+        default 16
+        help
+            Specifies the number of attempts the system will make to send a UART message.
+            Increasing this value can improve reliability in noisy environments,
+            while decreasing it can reduce latency.
+
+    config UART_CRITICAL_MESSAGE_SEND_ATTEMPTS
+        int "UART Critical Message Send Attempts"
+        range 1 100
+        default 16
+        help
+            Specifies the number of attempts the system will make to send a UART message.
+            Increasing this value can improve reliability in noisy environments,
+            while decreasing it can reduce latency.
+
+    # Configuration for UART Message Receive Attempts
+    config UART_MESSAGE_RECV_ATTEMPTS
+        int "UART Message Receive Attempts"
+        range 1 10
+        default 1
+        help
+            Specifies the number of attempts the system will make to receive a UART message.
+            Increasing this value can improve message reception reliability,
+            while decreasing it can reduce resource usage.
+
+    # Configuration for UART Message Receive Timeout
+    config UART_MESSAGE_RECV_TIMEOUT_MS
+        int "UART Message Receive Timeout (ms)"
+        range 1 1000
+        default 15
+        help
+            Specifies the timeout duration in milliseconds for receiving a UART message.
+            A shorter timeout can reduce latency, while a longer timeout can improve
+            message reception reliability.
+
+    config UART_CRITICAL_MESSAGE_RECV_TIMEOUT_MS
+        int "UART Critical Message Receive Timeout (ms)"
+        range 1 1000
+        default 15
+        help
+            Specifies the timeout duration in milliseconds for receiving a UART message.
+            A shorter timeout can reduce latency, while a longer timeout can improve
+            message reception reliability.
+
+    config UART_RXD
+        int "UART RXD pin number"
+        range ENV_GPIO_RANGE_MIN ENV_GPIO_IN_RANGE_MAX
+        default 4
+        help
+            GPIO number for UART RX pin. See UART documentation for more information
+            about available pin numbers for UART.
+
+    config UART_RX_QUEUE_SIZE
+        int "UART RX Queue Size"
+        default 4
+        range 1 16
+        help
+            This configuration defines the size of the RX queue for the UART communication.
+
+    config UART_RX_QUEUE_ENQUEUE_TIMEOUT_MS
+        int "UART RX Queue Enqueue Timeout (ms)"
+        default 100
+        range 10 1000
+        help
+            This configuration defines the timeout in milliseconds for enqueuing data into the
+            RX queue. When the queue is full, the enqueue operation will block for this amount of
+            time before returning an error.
+
+    config UART_TXD
+        int "UART TXD pin number"
+        range ENV_GPIO_RANGE_MIN ENV_GPIO_OUT_RANGE_MAX
+        default 5
+        help
+            GPIO number for UART TX pin. See UART documentation for more information
+            about available pin numbers for UART.
+
+    config UART_TX_BUFFER_ENABLE
+        bool "Enable UART TX Buffer"
+        default y
+        help
+            This configuration enables the use of a buffer for UART TX. If enabled, the UART
+            driver will buffer the data and send it in batches. This can improve performance
+            and reduce the number of times the TX pin is toggled.
+
+    config UART_TX_TARGETS
+        int "Maximum UART TX Targets"
+        default 6
+        range 1 100
+        help
+            This configuration defines the maximum number of targets that can be registered for
+            messages to be sent over UART.
+
+    config TASK_MAP_CAPACITY
+        int "Task Map Capacity"
+        default 100
+        range 1 1000
+        help
+            This configuration defines the maximum number of tasks that can be stored in the Task Map.
+            The Task Map holds the (addr, command) -> TaskHandle_t mappings. Set an appropriate
+            capacity based on the expected number of tasks.
+
+    config TASK_MAP_MUTEX_TIMEOUT_MS
+        int "Task Map Mutex Timeout (ms)"
+        default 1000
+        range 1 10000
+        help
+            This configuration defines the timeout in milliseconds for acquiring the Task Map mutex.
+            When accessing or modifying the Task Map, this timeout will be used to ensure the task
+            does not wait indefinitely for the mutex.
+
+    config FPGA_AS_UART_SWITCH
+        bool "Use FPGA as UART Switch"
+        default n
+        help
+          This configuration enables the use of an FPGA as a switch for UART communication.
+          When enabled:
+            - UART communication speed is fixed to 921600.
+            - The baud rate setting becomes non-configurable to ensure optimal FPGA operation.
+
+    config UART_COMM_DEBUG
+        bool "UART Communication Debugging"
+        default n
+        help
+            This configuration enables debugging messages for UART communication.
+
+    config UART_COMM_DEBUG_DATA
+        bool "UART Communication Debugging Data"
+        default n
+        help
+            This configuration enables logging data for UART communication.
+
+    config UART_STATE_DEBUG
+        bool "UART State Debugging"
+        default n
+        help
+            This configuration enables debugging messages for UART state.
+
+    config SYSTEM_REBOOT_ON_UART_RESET
+        bool "Reboot After UART State Reset"
+        default n
+        help
+            This configuration enables a reboot after the UART state is reset. This can be useful
+            for debugging purposes.
+
+    config UART_EVENT_TASK_PRIORITY
+        int "UART Event Task Priority"
+        default 23
+        range 1 23
+        help
+            This configuration defines the priority of the UART event task. The UART event task
+            is responsible for handling events related to UART communication, such as message
+            reception and transmission.
+
+endmenu
+

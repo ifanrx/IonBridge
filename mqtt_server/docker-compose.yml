@@ -1,0 +1,21 @@
+version: '3'
+
+services:
+  emqx:
+    image: emqx:5.6.0
+    container_name: emqx
+    ports:
+      - "1883:1883"    # MQTT 协议端口
+      - "8083:8083"    # WebSocket 协议端口，无加密
+      - "8084:8084"    # WebSocket 协议端口，启用 SSL/TLS
+      - "8883:8883"    # MQTT 协议端口，启用 SSL/TLS
+      - "18083:18083"  # EMQX Dashboard 管理界面
+    volumes:
+      - ./certs:/opt/emqx/etc/certs  # 挂载证书目录
+      # - ./emqx.conf:/opt/emqx/etc/emqx.conf  # 挂载自定义的 EMQX 配置文件
+    environment:
+      # - EMQX_LISTENER__SSL__EXTERNAL__KEYFILE=/opt/emqx/etc/certs/mqtt-broker.key
+      # - EMQX_LISTENER__SSL__EXTERNAL__CERTFILE=/opt/emqx/etc/certs/mqtt-broker.crt
+      # - EMQX_LISTENER__SSL__EXTERNAL__CACERTFILE=/opt/emqx/etc/certs/root-ca.crt
+      - EMQX_LISTENER__SSL__EXTERNAL__VERIFY=verify_peer
+      - EMQX_LISTENER__SSL__EXTERNAL__FAIL_IF_NO_PEER_CERT=true

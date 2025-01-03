@@ -1,0 +1,250 @@
+menu "Power Configuration"
+
+    orsource "$IDF_PATH/examples/common_components/env_caps/$IDF_TARGET/Kconfig.env_caps"
+
+    config POWER_PORT_NUMBER
+        int "Number of Power Ports"
+        range 1 5
+        default 5
+        help
+            Defines the total number of power ports available for distributing power.
+            This value determines how many ports the system can manage for power allocation,
+            ranging from a minimum of 1 port to a maximum of 5 ports.
+
+    config POWER_BUDGET
+        int "Total Power Budget"
+        range 20 224
+        default 170
+        help
+            Specifies the total available power budget for the system, measured in watts.
+            This is the maximum amount of power that can be allocated across all ports,
+            with a range from 20W to 224W. The system will distribute this budget to
+            connected ports based on their power requirements and current usage.
+
+    config DEFAULT_PORT_POWER_BUDGET
+        int "default port power budget"
+        default 140
+        help
+            Defines the amount (in watts) by which all port power budget when
+            device total power usage is below POWER_BUDGET_ALLOCATION_THRESHOLD(POWER_BUDGET * 0.75).
+
+    config DEVICE_UNDER_TEMP_INCREMENT
+        int "Power Increment for Device Under Temperature"
+        range 1 100
+        default 10
+        help
+            Defines the amount (in watts) by which the system will increase the total
+            power budget when the device temperature falls below the low temperature
+            threshold. This ensures the system can increase power consumption when thermal
+            conditions are optimal, allowing the device to maximize performance.
+
+    config DEVICE_LOW_TEMP_THRESHOLD
+        int "Device Low Temperature Threshold"
+        range 20 80
+        default 70
+        help
+            Defines the low temperature threshold (in degrees Celsius) for the device.
+            When the device temperature falls below this threshold, the system will apply
+            the specified power increment to increase power consumption and take advantage
+            of the cooler conditions for enhanced performance.
+
+    config DEVICE_OVER_TEMP_DECREMENT
+        int "Power Decrement for Device Over Temperature"
+        range 1 100
+        default 20
+        help
+            Defines the amount (in watts) by which the system will decrease the total
+            power budget when the device exceeds the high temperature threshold. This
+            ensures the system reduces power consumption to prevent overheating and
+            protect the device from thermal damage.
+
+    config DEVICE_POWER_COOLDOWN_TIME
+        int "Device Power Cooldown Time"
+        range 10 300
+        default 30
+        help
+            Defines the cooldown time (in seconds) for adjusting the device power.
+            The system will wait for this amount of time after making a power
+            adjustment before making another change.
+
+    config DEVICE_HIGH_TEMP_THRESHOLD
+        int "High temperature threshold (°C)"
+        default 83
+        range 60 100
+        help
+          The temperature threshold (in °C) at which the device begins reducing power.
+
+    config DEVICE_HIGH_TEMP_MIN_POWER_LIMIT
+        int "Minimum power limit at high temperature threshold"
+        default 100
+        help
+          The minimum power limit (in W) that the device will not reduce below when handling
+          the high temperature scenario.
+
+    config DEVICE_HIGHEST_TEMP_THRESHOLD
+        int "Highest temperature threshold (°C)"
+        default 88
+        help
+          The higher temperature threshold (in °C) at which the device reduces power even more.
+
+    config DEVICE_HIGHEST_TEMP_MIN_POWER_LIMIT
+        int "Minimum power limit at highest temperature threshold"
+        default 75
+        help
+          The minimum power limit (in W) that the device will not reduce below when handling the highest temperature scenario.
+
+    config OVERPROVISIONING_THRESHOLD
+        int "Overprovisioning Threshold for Power Budget"
+        range 50 160
+        default 145
+        help
+            Defines the threshold (in watts) for entering the over-limit provisioning
+            mode. When the total power usage across the 5 ports exceeds this threshold, the system
+            will switch from overprovisioning to over-limit provisioning mode.
+
+    config PORT_POWER_CAP_INCREASE_MIN_REMAINING
+        int "Minimum Remaining Power for Port Power Cap Increase"
+        range 10 100
+        default 15
+        help
+            Defines the minimum remaining power (in watts) required for increasing the port power cap.
+            If the system's remaining power is greater than this value, the port power cap can be increased.
+            This ensures that enough power is available in the system before increasing the power cap
+            to prevent overallocation and maintain stable operation.
+
+    config PORT_POWER_CAP_DECREASE_MIN_REMAINING
+        int "Minimum Remaining Power for Port Power Cap Decrease"
+        range 10 100
+        default 15
+        help
+            Defines the minimum remaining power (in watts) required for decreasing the port power cap.
+            If the system's remaining power is less than this value, the port power cap can be decreased.
+
+    config PORT_POWER_CAP_INCREASE_THRESHOLD
+        int "Port Power Cap Increase Threshold"
+        range 5 100
+        default 5
+        help
+            Defines the threshold (in watts) for increasing the port power cap. If the
+            difference between the port power cap and the actual power usage is less
+            than this threshold, the system will increase the port power cap. This ensures
+            that the port has sufficient headroom to handle increasing power demands when
+            it is close to reaching its current power cap.
+
+    config PORT_POWER_CAP_INCREASE_STEP
+        int "Port Power Cap Increase Step"
+        range 1 50
+        default 10
+        help
+            Defines the step size (in watts) by which the port power cap will be increased
+            when the system determines that more headroom is needed. This step size determines
+            how much the port power cap is raised each time the increase threshold is triggered.
+
+    config PORT_POWER_CAP_DECREASE_THRESHOLD
+        int "Port Power Cap Decrease Threshold"
+        range 15 100
+        default 15
+        help
+            Defines the threshold (in watts) for decreasing the port power cap. If the
+            difference between the port power cap and the actual power usage is greater
+            than this threshold, the system will decrease the port power cap. This helps
+            optimize power allocation by reducing the port power cap when there is excess
+            unused capacity, ensuring the system stays within the desired power budget.
+
+    config PORT_POWER_ADJUSTMENT_THRESHOLD
+        int "Port Power Adjustment Threshold"
+        range 1 20
+        default 5
+        help
+            Defines the threshold (in watts) for determining whether a power adjustment
+            is significant. If the absolute value of the power adjustment is greater
+            than or equal to this threshold, the system will consider it a significant
+            change and apply the adjustment.
+
+    config LOW_POWER_USAGE_THRESHOLD
+        int "Low Power Usage Threshold"
+        range 10 50
+        default 25
+        help
+            Defines the threshold (in watts) for low power usage. If a port's power
+            usage falls below this threshold, it will be considered low power usage.
+            The system may prioritize preserving power for these ports during power
+            allocation, ensuring efficient use of available resources.
+
+    config HIGH_POWER_USAGE_THRESHOLD
+        int "High Power Usage Threshold"
+        range 50 100
+        default 60
+        help
+            Defines the threshold (in watts) for high power usage. If the device's total
+            power is insufficient to allocate at least 25W to a port, the system will
+            prioritize reducing the power allocation on ports with power usage exceeding
+            this threshold. This ensures that high-power-consuming ports are reduced first
+            to balance the power allocation.
+
+    config MAX_POWER_BUDGET
+        int "Max Power Budget"
+        range 20 224
+        default 160
+        help
+            This is the maximum amount of power that can be allocated across all ports,
+            with a range from 20W to 224W.
+
+    config DEVICE_LOW_TEMP_THRESHOLD_IN_TEMPERATURE_PRIORITY
+        int "Low Temperature Threshold in Temperature Priority Mode"
+        range 20 80
+        default 55
+        help
+            Specifies the lower temperature limit (in degrees Celsius)
+            for the device in Temperature Priority mode. Below this temperature,
+            the system increases power consumption to leverage cooler conditions
+            for improved performance.
+
+    config DEVICE_HIGH_TEMP_THRESHOLD_IN_TEMPERATURE_PRIORITY
+        int "High Temperature Threshold in Temperature Priority Mode"
+        range 60 100
+        default 60
+        help
+            Defines the upper temperature limit (in degrees Celsius)
+            for the device in Temperature Priority mode.
+            Exceeding this temperature prompts the system to decrease power consumption
+            to mitigate overheating risks.
+
+    config POWER_ALLOCATOR_EVENT_QUEUE_SIZE
+        int "Power Allocator Event Queue Size"
+        range 1 100
+        default 20
+        help
+            Defines the size of the event queue for the power allocator.
+
+    config DEVICE_DEAD_TEMP_THRESHOLD
+        int "Device Dead Temperature Threshold"
+        default 100
+        range 90 120
+        help
+            The temperature threshold (in °C) at which the device is considered dead.
+            If the device temperature exceeds this threshold, all ports would be turn off.
+
+    config DEVICE_RECOVER_TEMP_THRESHOLD
+        int "Device Recover Temperature Threshold"
+        default 95
+        range 90 120
+        help
+            The temperature threshold (in °C) at which the device is recover from dead.
+
+    config DEVICE_DEAD_TEMP_THRESHOLD_IF_POWER_ALLOCATION_DISABLED
+        int "Device Dead Temperature Threshold If Power Allocation Disabled"
+        default 105
+        range 90 120
+        help
+            Power allocation is disabled. The temperature threshold (in °C) at which the device is considered dead.
+            If the device temperature exceeds this threshold, all ports would be turn off.
+
+    config FAST_CHARGING_STRATEGY_REALLOCATION_APPLY_COUNT
+        int "Fast Charging Strategy Reallocation apply count"
+        default 60
+        help
+            Indicated how many strategy apply event runs before reallocation event should run.
+
+endmenu
+

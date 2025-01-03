@@ -1,0 +1,13 @@
+[tool.pyright]
+pythonVersion = "3.12"
+exclude = [
+  "**/__pycache__",
+  ".pio",
+  "venv",
+  "python/command_pb2.py",
+  "python/typings",
+]
+venv = "venv"
+venvPath = "."
+stubPath = "python/typings"
+extraPaths = ["python"]

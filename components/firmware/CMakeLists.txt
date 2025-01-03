@@ -1,0 +1,21 @@
+file(GLOB SOURCES *.cpp)
+idf_component_register(
+  SRCS
+  ${SOURCES}
+  INCLUDE_DIRS
+  "include"
+  REQUIRES
+  version
+  PRIV_REQUIRES
+  animation
+  app
+  app_update
+  esp_http_client
+  esp_https_ota
+  esp_partition
+  mbedtls
+  mqtt_app
+  nvs_data
+  storage
+  task
+  utils)
