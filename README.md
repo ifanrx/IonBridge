@@ -99,4 +99,4 @@ $ idf.py build
 HummingBoard is a fully functional development board for the power adapter in this project, designed specifically for development and testing.
 
 - **Comprehensive Features**: Provides a complete development environment for power conversion.
-- **Schematic Support**: You can find detailed schematics and related documentation in [HummingBoard](.../HummingBoard).
+- **Schematic Support**: You can find detailed schematics and related documentation in [HummingBoard](/HummingBoard/).
