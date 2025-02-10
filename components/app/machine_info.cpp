@@ -8,7 +8,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <iomanip>
 #include <sstream>
 
 #include "esp_check.h"
@@ -203,9 +202,8 @@ esp_err_t MachineInfo::ReadHWRev() {
   if (strlen(CONFIG_HW_REVISION_VALUE) > 0 &&
       strlen(CONFIG_HW_REVISION_VALUE) < 8) {
     ESP_LOGW(TAG, "Setting HW revision to '%s'", CONFIG_HW_REVISION_VALUE);
-    NVSNamespace::SSet(CONFIG_HW_REVISION_VALUE, NVSKey::DEVICE_HARDWARE_REV,
-                       strlen(CONFIG_HW_REVISION_VALUE),
-                       PROTECTED_DATA_NVS_PARTITION, DEVICE_DATA_NVS_NAMESPACE);
+    DeviceNVSSet(CONFIG_HW_REVISION_VALUE, NVSKey::DEVICE_HARDWARE_REV,
+                 strlen(CONFIG_HW_REVISION_VALUE));
   }
 #endif
   char hw_version[8] = "DEV";
@@ -222,9 +220,8 @@ esp_err_t MachineInfo::ReadDeviceModel() {
   if (strlen(CONFIG_DEVICE_MODEL_VALUE) > 0 &&
       strlen(CONFIG_DEVICE_MODEL_VALUE) < 8) {
     ESP_LOGW(TAG, "Setting device model to '%s'", CONFIG_DEVICE_MODEL_VALUE);
-    NVSNamespace::SSet(CONFIG_DEVICE_MODEL_VALUE, NVSKey::DEVICE_MODEL,
-                       strlen(CONFIG_DEVICE_MODEL_VALUE),
-                       PROTECTED_DATA_NVS_PARTITION, DEVICE_DATA_NVS_NAMESPACE);
+    DeviceNVSSet(CONFIG_DEVICE_MODEL_VALUE, NVSKey::DEVICE_MODEL,
+                 strlen(CONFIG_DEVICE_MODEL_VALUE));
   }
 #endif
   char model[8] = "";
@@ -247,10 +244,8 @@ esp_err_t MachineInfo::ReadDeviceModel() {
   if (strlen(model) != length) {
     // Override, write to NVS
     length = strlen(model);
-    ESP_RETURN_ON_ERROR(NVSNamespace::SSet(model, NVSKey::DEVICE_MODEL, length,
-                                           PROTECTED_DATA_NVS_PARTITION,
-                                           DEVICE_DATA_NVS_NAMESPACE),
-                        TAG, "set_device_model");
+    ESP_RETURN_ON_ERROR(DeviceNVSSet(model, NVSKey::DEVICE_MODEL, length), TAG,
+                        "set_device_model");
   }
 #endif
   device_model_ = model;
@@ -286,9 +281,8 @@ esp_err_t MachineInfo::ReadProductFamily() {
     // Ensure null-terminated string
     product_family[product_family_length] = '\0';
     ESP_LOGW(TAG, "Setting product family to '%s'", product_family);
-    NVSNamespace::SSet(product_family, NVSKey::DEVICE_PRODUCT_FAMILY,
-                       product_family_length, PROTECTED_DATA_NVS_PARTITION,
-                       DEVICE_DATA_NVS_NAMESPACE);
+    DeviceNVSSet(product_family, NVSKey::DEVICE_PRODUCT_FAMILY,
+                 product_family_length);
   }
 #else
   ESP_RETURN_ON_ERROR(DeviceNVSGet(product_family, &product_family_length,
@@ -320,9 +314,8 @@ esp_err_t MachineInfo::ReadProductColor() {
     }
     product_color_length = strlen(product_color);
     ESP_RETURN_ON_ERROR(
-        NVSNamespace::SSet(product_color, NVSKey::DEVICE_PRODUCT_COLOR,
-                           product_color_length, PROTECTED_DATA_NVS_PARTITION,
-                           DEVICE_DATA_NVS_NAMESPACE),
+        DeviceNVSSet(product_color, NVSKey::DEVICE_PRODUCT_COLOR,
+                     product_color_length),
         TAG, "set_product_color");
   }
 

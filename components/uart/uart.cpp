@@ -486,7 +486,7 @@ esp_err_t uart_init() {
                         "xQueueCreate");
   }
   uart_initialized = true;
-  xTaskCreate(uart_event_task, "uart_event_task", 3 * 1024, NULL,
+  xTaskCreate(uart_event_task, "uart_event", 3 * 1024, NULL,
               UART_EVENT_TASK_PRIORITY, NULL);
   return ESP_OK;
 }

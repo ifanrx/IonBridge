@@ -3,7 +3,6 @@
 
 #include <vector>
 
-#include "app.h"
 #include "protocol.h"
 
 // 4 handlers * 1024 bytes = 4KB
@@ -28,7 +27,6 @@ class MessageHandler : public IMessageHandler {
  private:
   // Private member variables here
   MessageFragHandler *handlers_;
-  App *app_;
   uint16_t peerMTU_;
 
   std::vector<uint8_t> requestBuffer_;
@@ -44,7 +42,7 @@ class MessageHandler : public IMessageHandler {
 
  public:
   // Constructor
-  explicit MessageHandler(App *app);
+  explicit MessageHandler();
   ~MessageHandler();
 
   void handle_syn(Message &msg) override;

@@ -86,4 +86,10 @@ config BLE_ADV_DURATION_MS
     help
         The duration of the advertisement. The valid range is from 0 to 65535.
 
+config DEINIT_BLE_ON_STOP_ADVERTISING
+    bool "Deinit BLE on stop advertising"
+    default n
+    help
+        Set to true to deinit BLE stack when stop advertising.
+
 endmenu

@@ -39,15 +39,13 @@ PowerConfig power_config = default_power_config;
 void init_power_config() {
   esp_err_t ret;
   size_t length = sizeof(PowerConfig);
-  ESP_GOTO_ON_ERROR(PowerNVSGet(reinterpret_cast<uint8_t *>(&power_config),
-                                &length, NVSKey::POWER_CONFIG),
-                    DEFAULT_CONFIG, TAG, "PowerNVSData::GetPowerConfig");
-  return;
-DEFAULT_CONFIG:
-  ESP_LOGW(TAG, "Failed to get power config from NVS err=0x%04X, use default",
-           ret);
-  power_config = default_power_config;
-  return;
+  ret = PowerNVSGet(reinterpret_cast<uint8_t *>(&power_config), &length,
+                    NVSKey::POWER_CONFIG);
+  if (ret != ESP_OK) {
+    ESP_LOGW(TAG, "Failed to get power config from NVS err=0x%04X, use default",
+             ret);
+    power_config = default_power_config;
+  }
 }
 
 esp_err_t reset_power_config() {

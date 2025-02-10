@@ -53,9 +53,7 @@ enum TelemetryServiceCommand : uint16_t {
   OVER_TEMPERATURE_ALERT = 0x0161,
   PD_CHARGING_ALERT = 0x0162,
 
-  REQUEST_OTA_CONFIRMATION = 0xFF00,
   REQUEST_SHUTDOWN_BLE = 0xFF01,
-  REQUEST_OTA_CONFIRMATION2 = 0xFF02,
 };
 
 struct MQTTMessageHeader {
@@ -83,8 +81,7 @@ struct MQTTMessage {
 // 32 bytes
 struct PortStatusData {
   uint16_t charging_minutes;  // 2 bytes
-  PowerFeatures features;     // 2 bytes
-  uint8_t unused0;            // 1 bytes
+  PowerFeatures features;     // 3 bytes
   PortDetails details;        // 21 bytes
   uint8_t unused1[6];         // 6 bytes
 };
@@ -380,17 +377,6 @@ struct SW3566UpgradeInfo : MQTTMessage {
 #endif
 
 struct OTAConfirmInfo : MQTTMessage {
-  uint8_t hash[32];
-
-  std::vector<uint8_t> serialize() const override {
-    std::vector<uint8_t> payload = header.serialize();
-    payload.reserve(sizeof(*this));
-    payload.insert(payload.end(), hash, hash + sizeof(hash));
-    return payload;
-  }
-};
-
-struct OTAConfirmInfo2 : MQTTMessage {
   uint8_t hash[32];
   uint8_t esp32_version[3];  // major minor revision
 

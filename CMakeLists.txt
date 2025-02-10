@@ -20,3 +20,5 @@ set(EXTRA_COMPONENT_DIRS components/)
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 include_directories(include)
 project(IonBridge)
+
+idf_build_set_property(COMPILE_DEFINITIONS "dhcp_network_changed=dhcp_network_changed_link_up" APPEND)

@@ -23,6 +23,18 @@ esp_err_t DisplayHandler::SetDisplayIntensity(
     return ESP_FAIL;
   }
   uint8_t intensity = request[0];
+  if (intensity == 0) {
+    // set display mode to off if intensity is 0
+    ctx.controller.set_display_intensity(intensity);
+    ESP_RETURN_ON_ERROR(ctx.controller.set_display_mode(DisplayMode::OFF), TAG,
+                        "rpc::display::set_display_mode");
+    return ESP_OK;
+  }
+  if (ctx.controller.get_display_mode() == DisplayMode::OFF) {
+    ESP_RETURN_ON_ERROR(
+        ctx.controller.set_display_mode(DisplayMode::POWER_METER), TAG,
+        "rpc::display::set_display_mode");
+  }
   return ctx.controller.set_display_intensity(intensity);
 }
 
@@ -93,6 +105,10 @@ esp_err_t DisplayHandler::SetDisplayConfig(AppContext &ctx,
     return ESP_FAIL;
   }
   uint8_t intensity = request[0];
+  uint8_t mode = request[2];
+  if (intensity == 0) {
+    mode = DisplayMode::OFF;
+  }
   ESP_RETURN_ON_ERROR(ctx.controller.set_display_intensity(intensity), TAG,
                       "set_display_intensity");
 
@@ -102,7 +118,6 @@ esp_err_t DisplayHandler::SetDisplayConfig(AppContext &ctx,
   ESP_RETURN_ON_ERROR(rpc::display::set_display_flip_mode(flip), TAG,
                       "rpc::display::set_display_flip_mode");
 
-  uint8_t mode = request[2];
   ESP_RETURN_ON_ERROR(ctx.controller.set_display_mode(mode), TAG,
                       "set_display_mode");
 
@@ -130,7 +145,7 @@ esp_err_t DisplayHandler::SetDisplayState(AppContext &ctx,
       break;
     }
     case DISPLAY_ON_FULL: {
-      AnimationController::GetInstance().stop_animation(
+      AnimationController::GetInstance().StopAnimation(
           AnimationId::BLE_ADVERTISING);
       ESP_RETURN_ON_ERROR(rpc::display::set_display_mode(DisplayMode::MANUAL),
                           TAG, "rpc::display::set_display_mode MANUAL");

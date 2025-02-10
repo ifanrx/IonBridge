@@ -33,35 +33,31 @@ esp_err_t OTAHandler::StartOTA(AppContext &ctx,
   memcpy(&new_version, request.data(), sizeof(new_version));
 
 #ifdef CONFIG_MCU_MODEL_SW3566
-  ESP_LOGI(TAG, "New version - SW3566 %d.%d.%d, FPGA %d.%d.%d, ESP32 %d.%d.%d",
-           new_version.sw3566_version[0], new_version.sw3566_version[1],
-           new_version.sw3566_version[2], new_version.fpga_version[0],
-           new_version.fpga_version[1], new_version.fpga_version[2],
+  ESP_LOGI(
+      TAG,
+      "New version - SW3566 %d.%d.%d, FPGA %d.%d.%d, ESP32 %d.%d.%d, force: %d",
+      new_version.sw3566_version[0], new_version.sw3566_version[1],
+      new_version.sw3566_version[2], new_version.fpga_version[0],
+      new_version.fpga_version[1], new_version.fpga_version[2],
 #else
-  ESP_LOGI(TAG, "New version - ESP32 %d.%d.%d",
+  ESP_LOGI(TAG, "New version - ESP32 %d.%d.%d, force: %d",
 #endif
-           new_version.esp32_version[0], new_version.esp32_version[1],
-           new_version.esp32_version[2]);
+      new_version.esp32_version[0], new_version.esp32_version[1],
+      new_version.esp32_version[2], new_version.force);
 
   // Ensure WiFi is connected before proceeding with OTA
   ESP_RETURN_ON_FALSE(wifi_is_connected(), ESP_ERR_WIFI_NOT_CONNECT, TAG,
-                      "WiFi is not connected. Cannot perform OTA.");
+                      "WiFi is not connected");
 
-  ESP_RETURN_ON_ERROR(start_upgrade_task(&new_version), TAG,
-                      "Failed to start upgrade task");
-
-  ESP_LOGI(TAG, "OTA started successfully, turning off device.");
-  ctx.controller.set_upgrading(true);
   // De-initialize BLE stack to release resources
   ble_deinit();
-  return ESP_OK;
-}
+  if (start_upgrade_task(&new_version) != ESP_OK) {
+    ESP_LOGE(TAG, "Failed to start upgrade task, rebooting in 2 seconds");
+    ctx.controller.reboot_after(2 * 1000);
+    return ESP_FAIL;
+  }
 
-esp_err_t OTAHandler::ConfirmOTA(AppContext &ctx,
-                                 const std::vector<uint8_t> &request,
-                                 std::vector<uint8_t> &response) {
-  // Verify and perform OTA confirmation
-  ESP_RETURN_ON_ERROR(ctx.controller.confirm(request.data(), request.size()),
-                      TAG, "Failed to complete OTA confirmation");
+  ESP_LOGI(TAG, "OTA precheck passed, starting actual upgrade");
+  ctx.controller.set_upgrading(true);
   return ESP_OK;
 }

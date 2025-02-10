@@ -20,7 +20,7 @@ using HistoricalStatsData = RingBuffer<PortStatsData>;
 
 enum TemperatureMode : uint8_t {
   POWER_PRIORITY = 0x00,
-  TEMPERATURE_PRIORITY = 0x01
+  TEMPERATURE_PRIORITY = 0x01,
 };
 
 enum PowerAllocatorType : uint8_t {
@@ -38,7 +38,6 @@ enum class PowerAllocatorEventType {
   PORT_DETACHED = (1 << 2),
   REALLOCATE = (1 << 3),
 
-  TERMINATE_EVENT = 0xFF,
 };
 
 enum class PowerAllocatorMqttEventType {
@@ -78,6 +77,7 @@ class PowerAllocator {
   esp_err_t Start();
   void Stop();
   void Execute();
+  bool IsRunning() const { return taskRunning_; }
   void PortAttached();
   void PortDetached();
   void Reallocate();
@@ -86,9 +86,10 @@ class PowerAllocator {
   void ReducePowerBudget(uint8_t max_power, uint8_t decreasement,
                          uint8_t min_limit, const char *scenario);
   esp_err_t EnqueueEvent(PowerAllocatorEvent event);
+  esp_err_t EnqueueEvent(PowerAllocatorEventType event_type, uint8_t port_id);
   void EnqueueMqttEvent(PowerAllocatorMqttEvent event);
   void ReportPowerStats();
-  uint8_t AddApplyCount();
+  uint16_t AddApplyCount();
   void Configure(
       PowerStrategy *strategy, uint32_t cooldown_period_secs,
       uint32_t apply_period, uint32_t timer_period,

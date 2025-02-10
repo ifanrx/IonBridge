@@ -1,6 +1,5 @@
 #include "telemetry_task.h"
 
-#include <inttypes.h>
 #include <sys/param.h>
 
 #include <cstddef>
@@ -285,6 +284,7 @@ void TelemetryTask::ReportESP32UpgradeInfo(const Version &version,
   ESP_LOGI(TAG,
            "Publishing ESP32 upgrade info: status=%d, reason=%d, esp_err=%d",
            status, reason, esp_err);
+
   ESP32UpgradeInfo data;
   data.header = {
       .service = TelemetryServiceCommand::ESP32_UPGRADE_DATA,
@@ -355,26 +355,7 @@ esp_err_t TelemetryTask::ReportPingInfo() {
 #endif
 }
 
-void TelemetryTask::ReportOTAConfirmInfo() {
-#ifdef CONFIG_ENABLE_MQTT
-  ESP_LOGI(TAG, "Publishing OTA confirmation info");
-  OTAConfirmInfo2 data;
-  data.header = {
-      .service = TelemetryServiceCommand::REQUEST_OTA_CONFIRMATION2,
-      .message_id = GetMessageId(),
-  };
-  const esp_partition_t *partition = esp_ota_get_running_partition();
-  ESP_RETURN_VOID_ON_ERROR(esp_partition_get_sha256(partition, data.hash), TAG,
-                           "esp_partition_get_sha256");
-  ESP_LOG_BUFFER_HEX_LEVEL(TAG, data.hash, 32, ESP_LOG_DEBUG);
-  std::array<uint8_t, 3> esp32_version =
-      MachineInfo::GetInstance().GetESP32Version();
-  std::copy(esp32_version.begin(), esp32_version.end(), data.esp32_version);
-  ESP_RETURN_VOID_ON_ERROR(
-      MQTTClient::GetInstance()->Publish(data.serialize(), 1), TAG,
-      "Publish OTAConfirmInfo");
-#endif
-}
+void TelemetryTask::ReportOTAConfirmInfo() {}
 
 void TelemetryTask::RequestLicense() {
 #ifdef CONFIG_ENABLE_MQTT
@@ -565,9 +546,16 @@ void TelemetryTask::UnsubscribeTelemetryStream() {
 }
 
 bool TelemetryTask::IsTelemetryStreamSubscribed() {
-  return telemetry_stream_subscribed_at_ > 0 &&
-         esp_timer_get_time() - telemetry_stream_subscribed_at_ <
-             telemetry_stream_subscribe_timeout_us_;
+  if (telemetry_stream_subscribed_at_ <= 0) {
+    return false;
+  }
+  bool expired = esp_timer_get_time() - telemetry_stream_subscribed_at_ >
+                 telemetry_stream_subscribe_timeout_us_;
+  if (expired) {
+    ESP_LOGW(TAG, "Telemetry stream subscription has expired.");
+    UnsubscribeTelemetryStream();
+  }
+  return !expired;
 }
 
 bool TelemetryTask::IsPaused() { return paused; }

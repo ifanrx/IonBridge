@@ -8,7 +8,7 @@ extern "C" {
 #endif
 
 esp_err_t https_ota(const char *url, const char *cert_pem, const char *curr_ver,
-                    const char *new_ver);
+                    const char *new_ver, bool force);
 
 #ifdef __cplusplus
 }

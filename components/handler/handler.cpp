@@ -78,8 +78,6 @@ void Handler::RegisterAllServices(App &app) {
   // OTA
   app.Srv(ServiceCommand::START_OTA, OTAHandler::StartOTA,
           ServiceScope::SERVICE_SCOPE_ALL);
-  app.Srv(ServiceCommand::CONFIRM_OTA, OTAHandler::ConfirmOTA,
-          ServiceScope::SERVICE_SCOPE_ALL);
 
   // Ble
   app.Srv(ServiceCommand::GET_DEVICE_BLE_ADDR, BleHandler::GetDeviceBleAddress,
@@ -87,6 +85,8 @@ void Handler::RegisterAllServices(App &app) {
   app.Srv(ServiceCommand::SET_BLE_STATE, BleHandler::SetBleState,
           ServiceScope::SERVICE_SCOPE_ALL);
   app.Srv(ServiceCommand::GET_BLE_RSSI, BleHandler::GetBleRSSI,
+          ServiceScope::SERVICE_SCOPE_BLE);
+  app.Srv(ServiceCommand::GET_BLE_MTU, BleHandler::GetBleMTU,
           ServiceScope::SERVICE_SCOPE_BLE);
 
   // Wi-Fi
@@ -108,6 +108,10 @@ void Handler::RegisterAllServices(App &app) {
           ServiceScope::SERVICE_SCOPE_ALL);
   app.Srv(ServiceCommand::OPERATE_WIFI_RECORD, WiFiHandler::OperateWiFiRecord,
           ServiceScope::SERVICE_SCOPE_ALL);
+  app.Srv(ServiceCommand::GET_WIFI_STATE_MACHINE,
+          WiFiHandler::GetWiFiStateMachine, ServiceScope::SERVICE_SCOPE_ALL);
+  app.Srv(ServiceCommand::SET_WIFI_STATE_MACHINE,
+          WiFiHandler::SetWiFiStateMachine, ServiceScope::SERVICE_SCOPE_ALL);
 
   // Power
   app.Srv(ServiceCommand::TOGGLE_PORT_POWER, PowerHandler::TogglePortPower,
@@ -140,20 +144,6 @@ void Handler::RegisterAllServices(App &app) {
           ServiceScope::SERVICE_SCOPE_ALL);
   app.Srv(ServiceCommand::TURN_OFF_PORT, PowerHandler::TurnOffPort,
           ServiceScope::SERVICE_SCOPE_ALL);
-  app.Srv(ServiceCommand::SET_OVERCLOCK_FEATURE,
-          PowerHandler::SetPortOverclockFeature,
-          ServiceScope::SERVICE_SCOPE_ALL);
-  app.Srv(ServiceCommand::GET_OVERCLOCK_FEATURE,
-          PowerHandler::GetPortOverclockFeature,
-          ServiceScope::SERVICE_SCOPE_ALL);
-  app.Srv(ServiceCommand::SET_TFCP_FEATURE, PowerHandler::SetPortTFCPFeature,
-          ServiceScope::SERVICE_SCOPE_ALL);
-  app.Srv(ServiceCommand::GET_TFCP_FEATURE, PowerHandler::GetPortTFCPFeature,
-          ServiceScope::SERVICE_SCOPE_ALL);
-  app.Srv(ServiceCommand::SET_UFCS_FEATURE, PowerHandler::SetPortUFCSFeature,
-          ServiceScope::SERVICE_SCOPE_ALL);
-  app.Srv(ServiceCommand::GET_UFCS_FEATURE, PowerHandler::GetPortUFCSFeature,
-          ServiceScope::SERVICE_SCOPE_ALL);
   app.Srv(ServiceCommand::SET_STATIC_ALLOCATOR,
           PowerHandler::SetStaticAllocator, ServiceScope::SERVICE_SCOPE_ALL);
   app.Srv(ServiceCommand::GET_STATIC_ALLOCATOR,
@@ -172,6 +162,10 @@ void Handler::RegisterAllServices(App &app) {
           PowerHandler::SetTemperatureMode, ServiceScope::SERVICE_SCOPE_ALL);
   app.Srv(ServiceCommand::SET_TEMPORARY_ALLOCATOR,
           PowerHandler::SetTemporaryAllocator, ServiceScope::SERVICE_SCOPE_ALL);
+  app.Srv(ServiceCommand::SET_PORT_CONFIG1, PowerHandler::SetPortConfig,
+          ServiceScope::SERVICE_SCOPE_ALL);
+  app.Srv(ServiceCommand::GET_PORT_CONFIG1, PowerHandler::GetPortConfig,
+          ServiceScope::SERVICE_SCOPE_ALL);
 
   // Display
   app.Srv(ServiceCommand::SET_DISPLAY_INTENSITY,

@@ -32,7 +32,7 @@
 static const char *TAG = "Port";
 
 PortConfig default_port_config = {
-    .version = 0,
+    .version = 1,
     .features =
         {
             .EnableTfcp = false,
@@ -49,13 +49,16 @@ PortConfig default_port_config = {
             .EnableSamsung = true,
             .EnableUfcs = false,
             .EnablePd = true,
-            .EnableOverCompensation = false,
+            .EnablePdCompatMode = false,
             .LimitedCurrentMode = false,
+            .EnablePdPPS = true,
+            .EnablePdEPR = true,
+            .reserved = 0,
         },
 };
 
 PortConfig default_port_a_config = {
-    .version = 0,
+    .version = 1,
     .features =
         {
             .EnableTfcp = false,
@@ -72,8 +75,11 @@ PortConfig default_port_a_config = {
             .EnableSamsung = true,
             .EnableUfcs = false,
             .EnablePd = false,
-            .EnableOverCompensation = false,
+            .EnablePdCompatMode = false,
             .LimitedCurrentMode = false,
+            .EnablePdPPS = false,
+            .EnablePdEPR = false,
+            .reserved = 0,
         },
 };
 
@@ -111,9 +117,8 @@ bool Port::Initialize(bool active, uint8_t initial_power_budget) {
     // pcb layout issue, enable limited current mode on port 1 and 3
     if (hw_version.compare("B0P0") == 0 || hw_version.compare("PVT1") == 0 ||
         hw_version.compare("PVT2") == 0) {
-      features_.LimitedCurrentMode = true;
-      ESP_GOTO_ON_ERROR(rpc::mcu::set_power_features(id_, features_), RECOVER,
-                        TAG, "rpc::mcu::set_power_features(%d)", id_);
+      ESP_GOTO_ON_ERROR(EnableLimitedCurrentMode(), RECOVER, TAG,
+                        "EnableLimitedCurrentMode(%d)", id_);
       ESP_LOGW(TAG, "Limited current mode enabled for port %d", id_);
     }
   }
@@ -338,7 +343,7 @@ bool Port::ApplyMaxPowerBudget(uint8_t max_power_budget) {
 
   EnsureBudgetInRange(&max_power_budget);
   ESP_GOTO_ON_ERROR(rpc::mcu::set_max_power_budget(id_, max_power_budget,
-                                                   max_power_budget, false),
+                                                   max_power_budget, true),
                     RESET_STATE, TAG, "rpc::mcu::set_max_power_budget(%d, %d)",
                     id_, max_power_budget);
   ESP_GOTO_ON_ERROR(rpc::mcu::get_max_power_budget(id_, &power_budget_),
@@ -427,14 +432,23 @@ void Port::Shutdown() {
   this->SetState(PortStateType::DEAD);
 }
 
+esp_err_t Port::EnableLimitedCurrentMode() {
+  features_.LimitedCurrentMode = true;
+  return rpc::mcu::set_power_features(id_, features_);
+}
+
+esp_err_t Port::DisableLimitedCurrentMode() {
+  features_.LimitedCurrentMode = false;
+  return rpc::mcu::set_power_features(id_, features_);
+}
+
 void Port::EnterPowerLimiting() {
   ESP_LOGW(TAG, "Port %d enter power limiting", id_);
   esp_err_t ret = ESP_OK;
   uint8_t max_power_budget = MinPowerCap();
   uint8_t set_budget_ = 0;
-  features_.LimitedCurrentMode = true;
-  ESP_GOTO_ON_ERROR(rpc::mcu::set_power_features(id_, features_), RESET_STATE,
-                    TAG, "rpc::mcu::set_power_features(%d)", id_);
+  ESP_GOTO_ON_ERROR(EnableLimitedCurrentMode(), RESET_STATE, TAG,
+                    "EnableLimitedCurrentMode(%d)", id_);
   ESP_GOTO_ON_ERROR(
       rpc::mcu::set_max_power_budget(id_, max_power_budget, max_power_budget,
                                      true, &set_budget_),
@@ -464,9 +478,8 @@ void Port::ExitPowerLimiting() {
   if (!IsPowerLimiting()) {
     return;
   }
-  features_.LimitedCurrentMode = false;
-  ESP_GOTO_ON_ERROR(rpc::mcu::set_power_features(id_, features_), DEAD_PORT,
-                    TAG, "rpc::mcu::set_power_features(%d)", id_);
+  ESP_GOTO_ON_ERROR(DisableLimitedCurrentMode(), DEAD_PORT, TAG,
+                    "DisableLimitedCurrentMode(%d)", id_);
   SetState(PortStateType::ACTIVE);
   return;
 
@@ -499,4 +512,29 @@ DEAD_PORT:
   Reinitialize();
   SetState(PortStateType::ACTIVE);
   return;
+}
+
+void handle_port_config_compatibility(int port, PortConfig &config) {
+  switch (config.version) {
+    case 0: {
+      config.features.EnablePdPPS = port != 0;
+      config.features.EnablePdEPR = port != 0;
+      config.features.reserved = 0;
+      break;
+    }
+  }
+}
+
+bool Port::IsAdjustable() {
+  bool adjustable_ = false;
+  if (!attached_) {
+    adjustable_ = true;
+  } else {
+    uint8_t fc_protocal = data_.GetFCProtocol();
+    if (fc_protocal == FC_UFCS ||
+        (FC_NOT_CHARGING > fc_protocal && fc_protocal >= FC_PD_Fix5V)) {
+      adjustable_ = true;
+    }
+  }
+  return adjustable_;
 }

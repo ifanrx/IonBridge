@@ -161,17 +161,17 @@ config GENERATE_204_URL_GLOBAL_BACKUP
     help
         The URL of generate_204 service.
 
-config MQTT_FALLBACK_IP
-    string "MQTT Fallback IP Address"
-    default ""
-    help
-        Fallback IP address for the MQTT services
-
 config WIFI_RECONNECT_LOOP_INTERVAL_MS
     int "WiFi Reconnect Loop Timer Interval (ms)"
     default 300000
     help
         Timer interval in milliseconds before attempting to next reconnect loop.
+
+config WIFI_ABORT_WAIT_MS
+    int "WiFi Wait Time After Abort (ms)"
+    default 1800000
+    help
+        Timer interval in milliseconds after aborting wifi connection.
 
 config DISPLAY_FLASH_INTERVAL_MS
     int "Display Flash Interval (ms)"
@@ -179,5 +179,11 @@ config DISPLAY_FLASH_INTERVAL_MS
     help
         This setting determines how frequently the display switches between on and off states during flashing sequences. 
         Flashing is typically used to indicate statuses such as ongoing Wi-Fi reconnection attempts.
+
+config WIFI_CONNECT_SET_BSSID
+    bool "Set BSSID when connecting to Wi-Fi"
+    default n
+    help
+        Set BSSID when connecting to Wi-Fi.
 
 endmenu

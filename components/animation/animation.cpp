@@ -3,9 +3,14 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 
+#include <algorithm>
 #include <array>
 #include <climits>
 #include <cstdint>
+#include <cstring>
+#include <functional>
+#include <map>
+#include <vector>
 
 #include "controller.h"
 #include "data_types.h"
@@ -17,11 +22,13 @@
 #include "ionbridge.h"
 #include "portmacro.h"
 #include "rpc.h"
-#include "utils.h"
-
-#define EVENT_QUEUE_SIZE 5
+#include "sdkconfig.h"
 
 static const char *TAG = "Animation";
+
+#define DISPLAY_DEFAULT_MODE CONFIG_DISPLAY_MODE
+#define DISPLAY_DEFAULT_INTENSITY CONFIG_DISPLAY_INTENSITY
+static constexpr int frame_rate = CONFIG_ANIMATION_FRAME_RATE;
 
 static const Animation kBootAnimation = {
     .type = PERCENTAGE,
@@ -52,10 +59,7 @@ static const Animation kBleConnectedAnimation = {
     .reversed = false,
     .intensity = NormalDisplayIntensity,
     .adjust_intensity = false,
-    .segments = {{
-        {0, 255, 200},
-        {255, 000, 200},
-    }},
+    .segments = {{{0, 200, 200}, {255, 0, 300}, {0, 0, 200}}},
 };
 
 static const Animation kDownloadStage1Animation = {
@@ -150,33 +154,55 @@ static const Animation kWifiConnectingAnimation = {
     }},
 };
 
+static const std::array<const Animation *, 12> animations = {
+    &kBootAnimation,
+    &kBleAdvertisingAnimation,
+    &kBleConnectedAnimation,
+    &kDownloadStage1Animation,
+    &kDownloadStage2Animation,
+    &kDownloadStage3Animation,
+    &kUpdate3566Stage1Animation,
+    &kUpdate3566Stage2Animation,
+    &kUpdate3566Stage3Animation,
+    &kUpdate3566Stage4Animation,
+    &kUpdate3566Stage5Animation,
+    &kWifiConnectingAnimation,
+};
+
+static const std::map<AnimationId, std::vector<AnimationId>>
+    AnimationTransitionRules = {
+        {AnimationId::DOWNLOAD_STAGE1,
+         {AnimationId::DOWNLOAD_STAGE2, AnimationId::DOWNLOAD_STAGE3}},
+        {AnimationId::DOWNLOAD_STAGE2, {AnimationId::DOWNLOAD_STAGE3}},
+        {AnimationId::DOWNLOAD_STAGE3,
+         {AnimationId::UPDATE_3566_STAGE1, AnimationId::UPDATE_3566_STAGE2,
+          AnimationId::UPDATE_3566_STAGE3, AnimationId::UPDATE_3566_STAGE4,
+          AnimationId::UPDATE_3566_STAGE5}},
+        {AnimationId::UPDATE_3566_STAGE1,
+         {AnimationId::UPDATE_3566_STAGE2, AnimationId::UPDATE_3566_STAGE3,
+          AnimationId::UPDATE_3566_STAGE4, AnimationId::UPDATE_3566_STAGE5}},
+        {AnimationId::UPDATE_3566_STAGE2,
+         {AnimationId::UPDATE_3566_STAGE3, AnimationId::UPDATE_3566_STAGE4,
+          AnimationId::UPDATE_3566_STAGE5}},
+        {AnimationId::UPDATE_3566_STAGE3,
+         {AnimationId::UPDATE_3566_STAGE4, AnimationId::UPDATE_3566_STAGE5}},
+        {AnimationId::UPDATE_3566_STAGE4, {AnimationId::UPDATE_3566_STAGE5}},
+        {AnimationId::UPDATE_3566_STAGE5, {AnimationId::UPDATE_3566_STAGE5}},
+};
+
 AnimationController &AnimationController::GetInstance() {
   static AnimationController instance;
   return instance;
 }
 
-AnimationController::AnimationController()
-    : animations({
-          nullptr,
-          &kBootAnimation,
-          &kBleAdvertisingAnimation,
-          &kBleConnectedAnimation,
-          &kDownloadStage1Animation,
-          &kDownloadStage2Animation,
-          &kDownloadStage3Animation,
-          &kUpdate3566Stage1Animation,
-          &kUpdate3566Stage2Animation,
-          &kUpdate3566Stage3Animation,
-          &kUpdate3566Stage4Animation,
-          &kUpdate3566Stage5Animation,
-          &kWifiConnectingAnimation,
-      }) {}
-
-void AnimationController::perform_segment(uint8_t start_percent,
-                                          uint8_t end_percent, int duration_ms,
-                                          AnimationType animation_type) {
+void AnimationController::PlaySegment(uint8_t start_percent,
+                                      uint8_t end_percent, int duration_ms,
+                                      AnimationType animation_type) {
   int total_frames = duration_ms * frame_rate / 1000;
   int frame_duration_ms = 1000 / frame_rate;
+  std::function<esp_err_t(uint8_t)> set_display_func;
+  double percent_per_frame = 0.0, current_percent = 0.0;
+
   percent_per_frame =
       static_cast<double>(end_percent - start_percent) / total_frames;
 
@@ -186,33 +212,25 @@ void AnimationController::perform_segment(uint8_t start_percent,
   if (animation_type == AnimationType::INTENSITY) {
     ESP_ERROR_COMPLAIN(rpc::display::set_display_percentage(100),
                        "set_display_percentage");
+    set_display_func = rpc::display::set_display_intensity;
+  } else {
+    set_display_func = rpc::display::set_display_percentage;
   }
+
   for (int frame = 0; frame < total_frames; frame++) {
-    if (animation_type == AnimationType::INTENSITY) {
-      ESP_ERROR_COMPLAIN(rpc::display::set_display_intensity(current_percent),
-                         "set_display_intensity");
-    } else {
-      ESP_ERROR_COMPLAIN(rpc::display::set_display_percentage(current_percent),
-                         "set_display_percentage");
-    }
+    ESP_ERROR_COMPLAIN(set_display_func(current_percent),
+                       "set_display failed: %d", animation_type);
     vTaskDelay(pdMS_TO_TICKS(frame_duration_ms));
     current_percent += percent_per_frame;
   }
-  if (animation_type == AnimationType::INTENSITY) {
-    ESP_ERROR_COMPLAIN(rpc::display::set_display_intensity(end_percent),
-                       "set_display_intensity");
-  } else {
-    ESP_ERROR_COMPLAIN(rpc::display::set_display_percentage(end_percent),
-                       "set_display_percentage");
-  }
+  ESP_ERROR_COMPLAIN(set_display_func(end_percent),
+                     "set_display end failed: %d", animation_type);
 }
 
-void AnimationController::perform_animation(const Animation *animation) {
-  if (curr_display_mode != MANUAL) {
-    ESP_RETURN_VOID_ON_ERROR(rpc::display::set_display_mode(MANUAL), TAG,
-                             "set_display_mode: %d", MANUAL);
-    curr_display_mode = MANUAL;
-  }
+void AnimationController::PlayAnimation(const Animation *animation) {
+  // Change display mode to manual to play animation frame by frame
+  ESP_RETURN_VOID_ON_ERROR(rpc::display::set_display_mode(MANUAL), TAG,
+                           "set_display_mode: %d", MANUAL);
 
   if (animation->reversed) {
     ESP_RETURN_VOID_ON_ERROR(
@@ -229,53 +247,79 @@ void AnimationController::perform_animation(const Animation *animation) {
     if (animation->segments[i].duration_ms == 0) {
       break;
     }
-    perform_segment(animation->segments[i].start_percent,
-                    animation->segments[i].end_percent,
-                    animation->segments[i].duration_ms, animation->type);
+    PlaySegment(animation->segments[i].start_percent,
+                animation->segments[i].end_percent,
+                animation->segments[i].duration_ms, animation->type);
   }
 }
 
-void AnimationController::TaskLoop(void *arg) {
+void AnimationController::TaskLoopWrapper(void *arg) {
+  AnimationController *aController = static_cast<AnimationController *>(arg);
+  aController->TaskLoop();
+}
+
+void AnimationController::TaskLoop() {
   ESP_LOGI(TAG, "Animation task created");
-  uint32_t event;
   BaseType_t xResult;
-  AnimationEvent new_event = {
-      .animation_id = AnimationId::NO_ANIMATION,
-      .loop_mode = LoopMode::ONCE,
+  uint32_t event_val;
+  AnimationEvent curr_event = {
+      .event_type = AnimationEventType::STOP,
+      .animation_id = AnimationId::NO_ANIMATIONS,
+      .loop = false,
+      .reversed = 0,
   };
-  AnimationController &aController = AnimationController::GetInstance();
+  AnimationEvent event;
 
   while (true) {
-    event = 0;
-    xResult = xTaskNotifyWait(ULONG_MAX, ULONG_MAX, &event, pdMS_TO_TICKS(20));
-    if (xResult == pdPASS) {
-      memcpy(&new_event, &event, sizeof(AnimationEvent));
-      aController.curr_animation_id = new_event.animation_id;
+    xResult =
+        xTaskNotifyWait(ULONG_MAX, ULONG_MAX, &event_val, pdMS_TO_TICKS(20));
+    if (xResult != pdPASS) {
+      // no new event, check if current animation is finished
+      if (curr_event.animation_id == AnimationId::NO_ANIMATIONS ||
+          curr_event.event_type == AnimationEventType::STOP ||
+          !curr_event.loop) {
+        // no animation to perform currently, wait for next event
+        continue;
+      }
+      // back to previous event
+      event = curr_event;
+    } else {
+      memcpy(&event, &event_val, sizeof(event));
     }
-    if (new_event.animation_id == AnimationId::NO_ANIMATION) {
-      aController.stop_animation(AnimationId::NO_ANIMATION);
-      continue;
-    }
-    if (!aController.allow_perform(new_event.animation_id)) {
-      continue;
-    }
-    const Animation animation =
-        *aController.animations[(uint8_t)new_event.animation_id];
 
-    aController.perform_animation(&animation);
-    if (new_event.loop_mode == LoopMode::ONCE) {
-      new_event.animation_id = AnimationId::NO_ANIMATION;
-      aController.back_to_prev_state();
+    if (event.event_type == AnimationEventType::STOP) {
+      // Stop current animation if it is playing
+      if (curr_event.animation_id == event.animation_id) {
+        StopAnimation(&curr_event);
+      }
+      continue;
+    }
+    StopAnimation(&curr_event);
+
+    if (xResult == pdPASS &&
+        !isTransitionAllowed(curr_event.animation_id, event.animation_id)) {
+      continue;
+    }
+
+    curr_event = event;
+    auto animation = animations[(uint8_t)event.animation_id];
+    PlayAnimation(animation);
+
+    if (!event.loop) {
+      // Play the animation once
+      StopAnimation(&curr_event);
+      curr_event.animation_id = AnimationId::NO_ANIMATIONS;
+      curr_event.event_type = AnimationEventType::STOP;
     }
   }
 }
 
-esp_err_t AnimationController::start_task() {
-  if (taskHandle_ != nullptr) {
+esp_err_t AnimationController::StartTask() {
+  if (task_handle != nullptr) {
     return ESP_OK;
   }
-  BaseType_t ret =
-      xTaskCreate(TaskLoop, "animation", 2 * 1024, this, 1, &taskHandle_);
+  BaseType_t ret = xTaskCreate(TaskLoopWrapper, "animation", 2 * 1024, this, 1,
+                               &task_handle);
   if (ret != pdPASS) {
     ESP_LOGE(TAG, "Failed to create animation task");
     return ESP_FAIL;
@@ -284,93 +328,73 @@ esp_err_t AnimationController::start_task() {
   return ESP_OK;
 }
 
-void AnimationController::set_animation(AnimationId animation_id,
-                                        LoopMode loop_mode, bool force) {
-  if (taskHandle_ == nullptr) {
+void AnimationController::StartAnimation(AnimationId animation_id, bool loop) {
+  if (task_handle == nullptr) {
     ESP_LOGW(TAG, "Animation task not created");
     return;
   }
-  if (!force && is_high_priority_animation(curr_animation_id)) {
-    if (!is_high_priority_animation(animation_id)) {
-      return;
-    }
+  // temporarily ignore ble and wifi animations
+  if (animation_id == AnimationId::BLE_ADVERTISING ||
+      animation_id == AnimationId::BLE_CONNECTED ||
+      animation_id == AnimationId::WIFI_CONNECTING) {
+    return;
   }
-  ESP_LOGI(TAG, "Setting animation: %d, loop mode: %d", (uint8_t)animation_id,
-           loop_mode);
-  set_prev_state();
+  ESP_LOGI(TAG, "Starting animation: %d, loop: %d", (uint8_t)animation_id,
+           loop);
   AnimationEvent event = {
+      .event_type = AnimationEventType::PLAY,
       .animation_id = animation_id,
-      .loop_mode = loop_mode,
+      .loop = loop,
+      .reversed = 0,
   };
-  uint32_t event_;
-  memcpy(&event_, &event, sizeof(AnimationEvent));
-  xTaskNotify(taskHandle_, event_, eSetValueWithOverwrite);
+  xTaskNotify(task_handle, *(uint32_t *)&event, eSetValueWithOverwrite);
 }
 
-void AnimationController::stop_animation(AnimationId animation_id) {
-  if (taskHandle_ == nullptr ||
-      curr_animation_id == AnimationId::NO_ANIMATION) {
+void AnimationController::StopAnimation(AnimationId animation_id) {
+  if (task_handle == nullptr) {
     return;
   }
   ESP_LOGI(TAG, "Stopping animation: %d", (uint8_t)animation_id);
-  if (animation_id != AnimationId::NO_ANIMATION &&
-      animation_id != curr_animation_id) {
-    return;
-  }
-  if (curr_animation_id == AnimationId::NO_ANIMATION) {
-    return;
-  }
-  curr_animation_id = AnimationId::NO_ANIMATION;
-  curr_loop_mode = LoopMode::ONCE;
-  curr_display_mode = DISPLAY_DEFAULT_MODE;
-  back_to_prev_state();
-  xTaskNotify(taskHandle_, (uint32_t)AnimationId::NO_ANIMATION,
-              eSetValueWithOverwrite);
-  ESP_ERROR_COMPLAIN(rpc::display::set_display_mode(DISPLAY_DEFAULT_MODE),
-                     "set_display_mode: %d", DISPLAY_DEFAULT_MODE);
-  ESP_ERROR_COMPLAIN(
-      rpc::display::set_display_intensity(DISPLAY_DEFAULT_INTENSITY),
-      "set_display_intensity: %d", DISPLAY_DEFAULT_INTENSITY);
+  AnimationEvent event = {
+      .event_type = AnimationEventType::STOP,
+      .animation_id = animation_id,
+      .loop = false,
+      .reversed = 0,
+  };
+  xTaskNotify(task_handle, *(uint32_t *)&event, eSetValueWithOverwrite);
 }
 
-bool AnimationController::allow_perform(AnimationId animation_id) {
-  bool allowed = false;
-  if (AllowedAnimations[(uint8_t)curr_animation_id][0] ==
-      (uint8_t)AnimationId::MAX_ANIMATIONS) {
-    allowed = true;
-  } else {
-    for (auto val : AllowedAnimations[(uint8_t)curr_animation_id]) {
-      if (val == (uint8_t)animation_id) {
-        allowed = true;
-        break;
-      }
-    }
-  }
-  if (!allowed) {
-    ESP_LOGI(TAG,
-             "Animation %d is not allowed to perform while %d is "
-             "performing",
-             (uint8_t)animation_id, (uint8_t)curr_animation_id);
-  }
-  return allowed;
-}
+void AnimationController::StopAnimation(AnimationEvent *event) {
+  event->animation_id = AnimationId::NO_ANIMATIONS;
+  event->event_type = AnimationEventType::STOP;
+  event->loop = false;
 
-void AnimationController::set_prev_state() {
   DeviceController *controller = DeviceController::GetInstance();
-  if (controller) {
-    prev_display_mode = controller->get_display_mode();
-    prev_intensity = controller->get_display_intensity();
+  uint8_t display_mode = DISPLAY_DEFAULT_MODE,
+          display_intensity = DISPLAY_DEFAULT_INTENSITY;
+  if (controller != nullptr) {
+    display_mode = controller->get_display_mode();
+    display_intensity = controller->get_display_intensity();
+    ESP_LOGD(TAG, "Restoring display mode: %d, intensity: %d", display_mode,
+             display_intensity);
   }
+
+  ESP_ERROR_COMPLAIN(rpc::display::set_display_mode(display_mode),
+                     "set_display_mode: %d", display_mode);
+  ESP_ERROR_COMPLAIN(rpc::display::set_display_intensity(display_intensity),
+                     "set_display_intensity");
 }
-void AnimationController::back_to_prev_state() {
-  if (curr_display_mode != prev_display_mode) {
-    ESP_ERROR_COMPLAIN(rpc::display::set_display_mode(prev_display_mode),
-                       "set_display_mode: %d", prev_display_mode);
+
+bool AnimationController::isTransitionAllowed(AnimationId current,
+                                              AnimationId next) {
+  // Check if there are explicit rules for the current animation.
+  auto it = AnimationTransitionRules.find(current);
+  if (it != AnimationTransitionRules.end()) {
+    const auto &allowedTransitions = it->second;
+    // Transition is allowed only if the next animation is in the allowed list.
+    return std::find(allowedTransitions.begin(), allowedTransitions.end(),
+                     next) != allowedTransitions.end();
   }
-  if (curr_intensity != prev_intensity) {
-    ESP_ERROR_COMPLAIN(rpc::display::set_display_intensity(prev_intensity),
-                       "set_display_intensity");
-  }
-  curr_display_mode = prev_display_mode;
-  curr_intensity = prev_intensity;
+  // If no rules are defined, allow transition to any animation.
+  return true;
 }

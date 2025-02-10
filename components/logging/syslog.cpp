@@ -5,6 +5,7 @@
 #include <cstring>
 
 #include "esp_err.h"
+#include "esp_log.h"
 #include "freertos/idf_additions.h"
 #include "freertos/projdefs.h"
 #include "logging.h"
@@ -286,6 +287,28 @@ int SyslogClient::SendMessage(const char* format, va_list args) {
 #endif
 }
 
+void SyslogClient::Register() {
+#ifdef ENABLE_REPORT_SYSLOG
+  if (xSemaphoreTake(syslog_mutex_, semaphore_timeout_) != pdTRUE) {
+    INTERNAL_LOG("Failed to take mutex within %u ms",
+                 SYSLOG_SEMAPHORE_TIMEOUT_MS);
+    return;
+  }
+
+  vprintf_like_t esp_printf_func = nullptr;
+  if (wifi_is_connected()) {
+    esp_printf_func = esp_log_set_vprintf(SyslogClient::Report);
+  } else {
+    esp_printf_func = esp_log_set_vprintf(SyslogClient::LogToStdout);
+  }
+  if (esp_printf_ == nullptr) {
+    esp_printf_ = esp_printf_func;
+  }
+
+  xSemaphoreGive(syslog_mutex_);
+#endif
+}
+
 void SyslogClient::Cleanup() {
 #ifdef ENABLE_REPORT_SYSLOG
   if (!is_initialized_) {
@@ -298,6 +321,9 @@ void SyslogClient::Cleanup() {
     return;
   }
 
+  if (esp_printf_) {
+    esp_log_set_vprintf(esp_printf_);
+  }
   if (sockfd_ != -1) {
     close(sockfd_);
     sockfd_ = -1;

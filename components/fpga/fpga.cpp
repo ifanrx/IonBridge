@@ -21,7 +21,7 @@ void fpga_task(void *pvParameters);
 
 void fpga_init(void) {
   fpga_config_semaphore = xSemaphoreCreateBinary();
-  xTaskCreate(fpga_task, "fpga_task", 8192, NULL, 1, NULL);
+  xTaskCreate(fpga_task, "fpga", 8192, NULL, 1, NULL);
   xSemaphoreTake(fpga_config_semaphore, portMAX_DELAY);
   vSemaphoreDelete(fpga_config_semaphore);
 }

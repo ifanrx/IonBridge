@@ -1,13 +1,16 @@
 #include "ble.h"
 
+#include <cstdint>
 #include <cstring>
 #include <queue>
 #include <string>
 #include <vector>
 
 #include "NimBLEAdvertising.h"
+#include "NimBLECharacteristic.h"
 #include "NimBLEDevice.h"
 #include "animation.h"
+#include "ble_callbacks.h"
 #include "esp_check.h"
 #include "esp_err.h"
 #include "esp_log.h"
@@ -21,6 +24,7 @@
 #include "sdkconfig.h"
 #include "utils.h"
 #include "wifi.h"
+#include "wifi_state.h"
 
 #define BLE_ATT_MTU CONFIG_BLE_ATT_MTU
 #define SERVICE_UUID CONFIG_SERVICE_UUID
@@ -49,6 +53,7 @@ static bool deviceConnected = false;
 static uint16_t peerMTU = 23, connTimeout = 120;
 static BLEMessagesQueue bleMessagesQueue;
 static uint16_t deviceConnHandle = 0;
+static CharacteristicCallbacks *callbacks = new CharacteristicCallbacks();
 
 typedef enum {
   BLE_ADV_START,
@@ -65,136 +70,126 @@ static void stop_ble_adv_timer();
 static void ble_adv_timer_callback(TimerHandle_t xTimer);
 static void ble_adv_task(void *arg);
 
-class ServerCallbacks : public NimBLEServerCallbacks {
-  using NimBLEServerCallbacks::onConnect;
-  void onConnect(NimBLEServer *pServer, NimBLEConnInfo &connInfo) {
-    clientAddress = connInfo.getAddress().toString();
-    ESP_LOGI(TAG, "Connected, client address: %s", clientAddress.c_str());
+void ServerCallbacks::onConnect(NimBLEServer *pServer,
+                                NimBLEConnInfo &connInfo) {
+  clientAddress = connInfo.getAddress().toString();
+  ESP_LOGI(TAG, "Connected, client address: %s", clientAddress.c_str());
 
-    /** We can use the connection handle here to ask for different connection
-     * parameters.
-     *
-     * Args:
-     *   - connection handle
-     *   - min connection interval
-     *   - max connection interval
-     *   - latency
-     *   - supervision timeout
-     * Units:
-     *   - Min/Max Intervals: 1.25 millisecond increments.
-     *   - Latency: number of intervals allowed to skip.
-     *   - Timeout: 10 millisecond increments, try for 5x interval
-     *              time for best results.
-     */
-    uint16_t connHandle = connInfo.getConnHandle();
-    pServer->updateConnParams(connHandle, 0x20, 0x40, 0, connTimeout);
-    deviceConnHandle = connHandle;
-    deviceConnected = true;
+  /** We can use the connection handle here to ask for different connection
+   * parameters.
+   *
+   * Args:
+   *   - connection handle
+   *   - min connection interval
+   *   - max connection interval
+   *   - latency
+   *   - supervision timeout
+   * Units:
+   *   - Min/Max Intervals: 1.25 millisecond increments.
+   *   - Latency: number of intervals allowed to skip.
+   *   - Timeout: 10 millisecond increments, try for 5x interval
+   *              time for best results.
+   */
+  uint16_t connHandle = connInfo.getConnHandle();
+  pServer->updateConnParams(connHandle, 0x20, 0x40, 0, connTimeout);
+  deviceConnHandle = connHandle;
+  deviceConnected = true;
 
-    peerMTU = pServer->getPeerMTU(connHandle);
-    ESP_LOGI(TAG, "Peer MTU: %d", peerMTU);
-    AnimationController::GetInstance().set_animation(AnimationId::BLE_CONNECTED,
-                                                     LoopMode::FOREVER);
+  peerMTU = pServer->getPeerMTU(connHandle);
+  ESP_LOGI(TAG, "Peer MTU: %d", peerMTU);
+  AnimationController::GetInstance().StartAnimation(AnimationId::BLE_CONNECTED,
+                                                    true);
+}
+
+void ServerCallbacks::onDisconnect(NimBLEServer *pServer,
+                                   NimBLEConnInfo &connInfo, int reason) {
+  ESP_LOGI(TAG, "Disconnected with reason: %s(0x%04X)",
+           NimBLEUtils::returnCodeToString(reason), reason);
+  ESP_LOGD(TAG, "Connection Interval: %d ms", connInfo.getConnInterval());
+  ESP_LOGD(TAG, "Connection Timeout: %d ms", connInfo.getConnTimeout());
+  ESP_LOGD(TAG, "Connection Latency: %d", connInfo.getConnLatency());
+  ESP_LOGD(TAG, "MTU size: %d bytes", connInfo.getMTU());
+  deviceConnected = false;
+  clientAddress.clear();
+  AnimationController::GetInstance().StopAnimation(AnimationId::BLE_CONNECTED);
+}
+
+void ServerCallbacks::onMTUChange(uint16_t mtu, NimBLEConnInfo &connInfo) {
+  NimBLEServer *pServer = NimBLEDevice::getServer();
+  uint16_t connHandle = connInfo.getConnHandle();
+  ESP_LOGI(TAG, "MTU updated: %u for connection ID: %u", mtu, connHandle);
+  peerMTU = mtu;
+  pServer->updateConnParams(connHandle, 0x20, 0x40, 0, connTimeout);
+}
+
+void CharacteristicCallbacks::onWrite(NimBLECharacteristic *pCharacteristic,
+                                      NimBLEConnInfo &connInfo) {
+  NimBLEAttValue value = pCharacteristic->getValue();
+  const uint8_t *pData = value.data();
+  uint16_t length = value.length();
+  ESP_LOGD(TAG, "Write callback for characteristic %s with data length %d",
+           pCharacteristic->getUUID().toString().c_str(), length);
+  if (length <= 0) {
+    return;
   }
 
-  using NimBLEServerCallbacks::onDisconnect;
-  void onDisconnect(NimBLEServer *pServer, NimBLEConnInfo &connInfo,
-                    int reason) {
-    ESP_LOGI(TAG, "Disconnected with reason: %s(0x%04X)",
-             NimBLEUtils::returnCodeToString(reason), reason);
-    ESP_LOGD(TAG, "Connection Interval: %d ms", connInfo.getConnInterval());
-    ESP_LOGD(TAG, "Connection Timeout: %d ms", connInfo.getConnTimeout());
-    ESP_LOGD(TAG, "Connection Latency: %d", connInfo.getConnLatency());
-    ESP_LOGD(TAG, "MTU size: %d bytes", connInfo.getMTU());
-    deviceConnected = false;
-    clientAddress.clear();
-  }
+  ESP_LOGD(TAG, "Received: %s", to_hex_string(pData, length).c_str());
+  bleMessagesQueue.push(std::vector<uint8_t>(pData, pData + length));
+}
 
-  using NimBLEServerCallbacks::onMTUChange;
-  void onMTUChange(uint16_t mtu, NimBLEConnInfo &connInfo) {
-    NimBLEServer *pServer = NimBLEDevice::getServer();
-    uint16_t connHandle = connInfo.getConnHandle();
-    ESP_LOGI(TAG, "MTU updated: %u for connection ID: %u", mtu, connHandle);
-    peerMTU = mtu;
-    pServer->updateConnParams(connHandle, 0x20, 0x40, 0, connTimeout);
-  }
-};
+void CharacteristicCallbacks::onRead(NimBLECharacteristic *pCharacteristic,
+                                     NimBLEConnInfo &connInfo) {
+  logValue(pCharacteristic, "onRead");
+}
 
-class CharacteristicCallbacks : public NimBLECharacteristicCallbacks {
-  using NimBLECharacteristicCallbacks::onWrite;
-  void onWrite(NimBLECharacteristic *pCharacteristic,
-               NimBLEConnInfo &connInfo) {
-    NimBLEAttValue value = pCharacteristic->getValue();
-    const uint8_t *pData = value.data();
-    uint16_t length = value.length();
-    ESP_LOGD(TAG, "Write callback for characteristic %s with data length %d",
-             pCharacteristic->getUUID().toString().c_str(), length);
-    if (length <= 0) {
-      return;
-    }
+void CharacteristicCallbacks::onStatus(NimBLECharacteristic *pCharacteristic,
+                                       int code) {
+  ESP_LOGD(TAG, "Notification/Indication return code: %d, %s", code,
+           NimBLEUtils::returnCodeToString(code));
+}
 
-    ESP_LOGD(TAG, "Received: %s", to_hex_string(pData, length).c_str());
-    bleMessagesQueue.push(std::vector<uint8_t>(pData, pData + length));
-  }
-
-  using NimBLECharacteristicCallbacks::onRead;
-  void onRead(NimBLECharacteristic *pCharacteristic, NimBLEConnInfo &connInfo) {
-    logValue(pCharacteristic, "onRead");
-  }
-
-  void onNotify(NimBLECharacteristic *pCharacteristic) {
-    logValue(pCharacteristic, "onNotify");
-  }
-
-  void onStatus(NimBLECharacteristic *pCharacteristic, int code) {
-    ESP_LOGD(TAG, "Notification/Indication return code: %d, %s", code,
-             NimBLEUtils::returnCodeToString(code));
-  }
-
-  using NimBLECharacteristicCallbacks::onSubscribe;
-  void onSubscribe(NimBLECharacteristic *pCharacteristic,
-                   NimBLEConnInfo &connInfo, uint16_t subValue) {
+void CharacteristicCallbacks::onSubscribe(NimBLECharacteristic *pCharacteristic,
+                                          NimBLEConnInfo &connInfo,
+                                          uint16_t subValue) {
 #ifdef BLE_VERBOSE_LOGGING
-    std::string str = "Client ID: ";
-    str += std::to_string(connInfo.getConnHandle());
-    str += ", Address: ";
-    str += connInfo.getAddress().toString();
-    str += ", Subscription: ";
+  std::string str = "Client ID: ";
+  str += std::to_string(connInfo.getConnHandle());
+  str += ", Address: ";
+  str += connInfo.getAddress().toString();
+  str += ", Subscription: ";
 
-    switch (subValue) {
-      case 0:
-        str += "Unsubscribed from ";
-        break;
-      case 1:
-        str += "Subscribed to notifications for ";
-        break;
-      case 2:
-        str += "Subscribed to indications for ";
-        break;
-      case 3:
-        str += "Subscribed to notifications and indications for ";
-        break;
-      default:
-        str += "Unknown subscription status for ";
-        break;
-    }
+  switch (subValue) {
+    case 0:
+      str += "Unsubscribed from ";
+      break;
+    case 1:
+      str += "Subscribed to notifications for ";
+      break;
+    case 2:
+      str += "Subscribed to indications for ";
+      break;
+    case 3:
+      str += "Subscribed to notifications and indications for ";
+      break;
+    default:
+      str += "Unknown subscription status for ";
+      break;
+  }
 
-    str += pCharacteristic->getUUID().toString();
-    ESP_LOGD(TAG, "%s", str.c_str());
+  str += pCharacteristic->getUUID().toString();
+  ESP_LOGD(TAG, "%s", str.c_str());
 #endif
-  }
+}
 
- private:
-  void logValue(NimBLECharacteristic *pCharacteristic, const char *name) {
-    NimBLEAttValue value = pCharacteristic->getValue();
-    uint16_t length = value.length();
-    const uint8_t *pData = value.data();
-    ESP_LOGD(TAG,
-             "Characteristic UUID: %s, Function: %s, Value: %s, Length: %d",
-             pCharacteristic->getUUID().toString().c_str(), name,
-             to_hex_string(pData, length).c_str(), length);
-  }
-};
+void CharacteristicCallbacks::logValue(NimBLECharacteristic *pCharacteristic,
+                                       const char *name) {
+  NimBLEAttValue value = pCharacteristic->getValue();
+  uint16_t length = value.length();
+  const uint8_t *pData = value.data();
+  ESP_LOGD(TAG, "Characteristic UUID: %s, Function: %s, Value: %s, Length: %d",
+           pCharacteristic->getUUID().toString().c_str(), name,
+           to_hex_string(pData, length).c_str(), length);
+}
 
 static void ble_update_adv_interval() {
   if (pServer == nullptr) {
@@ -219,8 +214,8 @@ esp_err_t ble_init() {
   }
 
   esp_err_t __attribute__((unused)) ret;
+  deviceConnected = false;
   NimBLEService *service;
-  CharacteristicCallbacks *callbacks;
   uint8_t manufacturer_data[8] = {
       0xE9, 0x36, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
   };
@@ -251,6 +246,7 @@ esp_err_t ble_init() {
     return ESP_ERR_INVALID_STATE;
   }
   pServer->advertiseOnDisconnect(true);
+  // callback class will be deleted when server is destructed.
   pServer->setCallbacks(new ServerCallbacks());
 
   service = pServer->createService(serviceUUID);
@@ -268,7 +264,6 @@ esp_err_t ble_init() {
     ESP_LOGE(TAG, "Failed to create the BLE characteristics");
     return ESP_ERR_INVALID_MAC;
   }
-  callbacks = new CharacteristicCallbacks();
   pCharacteristicTX->setCallbacks(callbacks);
   pCharacteristicRX->setCallbacks(callbacks);
 
@@ -289,16 +284,15 @@ esp_err_t ble_init() {
   memcpy(manufacturer_data + 2, deviceAddr + 3, 3);
   manufacturer_data[5] = MachineInfo::GetInstance().GetProductFamilyEnumVal();
   manufacturer_data[6] = MachineInfo::GetInstance().GetDeviceModelEnumVal();
-  // TODO: Add product color to manufacturer data
-  // manufacturer_data[7] = MachineInfo::GetInstance().GetProductColorEnumVal();
+  manufacturer_data[7] = MachineInfo::GetInstance().GetProductColorEnumVal();
 
-  // TODO: Remove minus 1 when color is added to manufacturer data
   pAdvertising->setManufacturerData(std::vector<uint8_t>(
-      manufacturer_data, manufacturer_data + sizeof(manufacturer_data) - 1));
+      manufacturer_data, manufacturer_data + sizeof(manufacturer_data)));
   pAdvertising->setName(deviceName);
   pAdvertising->enableScanResponse(true);
   pAdvertising->addServiceUUID(service->getUUID());
   ble_update_adv_interval();
+  ESP_LOGI(TAG, "BLE initialized");
   return ESP_OK;
 }
 
@@ -311,11 +305,13 @@ esp_err_t ble_deinit() {
                       "Failed to stop Advertising");
   ESP_RETURN_ON_FALSE(NimBLEDevice::deinit(true), ESP_FAIL, TAG,
                       "Failed to deinit BLE Device");
+  ESP_LOGI(TAG, "BLE deinitialized");
+  deviceConnected = false;
   return ESP_OK;
 }
 
 void handle_ble_messages_task(void *arg) {
-  MessageHandler *msgHandler = new MessageHandler(App::GetInstance());
+  MessageHandler *msgHandler = new MessageHandler();
   esp_err_t __attribute__((unused)) ret;
   while (true) {
     if (!bleMessagesQueue.empty()) {
@@ -335,6 +331,8 @@ void handle_ble_messages_task(void *arg) {
   NEXT:
     DELAY_MS(50);
   }
+
+  delete msgHandler;
 }
 
 const char *get_client_address() { return clientAddress.c_str(); }
@@ -354,7 +352,9 @@ bool ble_start_advertising(bool force) {
   }
   if (deviceConnected && force) {
     ESP_RETURN_ON_FALSE(pServer && pServer->disconnect(deviceConnHandle), false,
-                        TAG, "Failed to disconnect from previous device");
+                        TAG,
+                        "Failed to disconnect from previous device before "
+                        "starting advertising");
   }
   ble_adv_start();
   return true;
@@ -373,6 +373,8 @@ esp_err_t get_ble_conn_rssi(int8_t *rssi) {
   ESP_RETURN_ON_FALSE(ret == 0, ESP_FAIL, TAG, "ble_gap_conn_rssi: %d", ret);
   return ESP_OK;
 }
+
+uint16_t get_ble_mtu() { return peerMTU; }
 
 bool ble_is_advertising() { return bleAdvState != BLE_ADV_STOP; }
 
@@ -397,21 +399,24 @@ void ble_adv_task(void *arg) {
     switch (new_state) {
       case BLE_ADV_START: {
         // start advertising indefinitely
+        wifi_controller.Notify(WiFiEventType::STOP_WEB_SERVER);
         if (ble_init() != ESP_OK || !pServer->startAdvertising()) {
           ESP_LOGE(TAG, "Failed to start advertising");
           continue;
         }
-        AnimationController::GetInstance().set_animation(
-            AnimationId::BLE_ADVERTISING, LoopMode::FOREVER);
+        AnimationController::GetInstance().StartAnimation(
+            AnimationId::BLE_ADVERTISING, true);
       } break;
       case BLE_ADV_STOP: {
         // stop advertising immediately
         if (NimBLEDevice::isInitialized()) {
           if (deviceConnected && !pServer->disconnect(deviceConnHandle)) {
-            ESP_LOGE(TAG, "Failed to disconnect from previous device");
+            ESP_LOGE(TAG,
+                     "Failed to disconnect from previous device before "
+                     "stopping advertising");
             continue;
           }
-#ifdef DEINIT_BLE_ON_STOP_ADVERTISING
+#ifdef CONFIG_DEINIT_BLE_ON_STOP_ADVERTISING
           if (ble_deinit() != ESP_OK) {
             ESP_LOGE(TAG, "Failed to deinit BLE");
             continue;
@@ -423,7 +428,8 @@ void ble_adv_task(void *arg) {
           }
 #endif
         }
-        AnimationController::GetInstance().stop_animation(
+        wifi_controller.Notify(WiFiEventType::START_WEB_SERVER);
+        AnimationController::GetInstance().StopAnimation(
             AnimationId::BLE_ADVERTISING);
       } break;
       case BLE_ADV_DELAY_START: {
@@ -485,6 +491,7 @@ void stop_ble_adv_timer() {
 }
 
 void ble_adv_timer_callback(TimerHandle_t xTimer) {
+  wifi_controller.Notify(WiFiEventType::STOP_WEB_SERVER);
   if (!NimBLEDevice::isInitialized()) {
     ESP_RETURN_VOID_ON_ERROR(ble_init(), TAG, "Failed to initialize BLE");
   }

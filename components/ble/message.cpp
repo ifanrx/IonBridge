@@ -6,7 +6,7 @@
 
 static const char *TAG = "Message";
 
-MessageHandler::MessageHandler(App *app) : app_(app) {
+MessageHandler::MessageHandler() {
   handlers_ = new MessageFragHandler[MAX_CONCURRENT_CONN];
   for (size_t i = 0; i < MAX_CONCURRENT_CONN; i++) {
     handlers_[i].free = true;
@@ -23,7 +23,8 @@ void MessageHandler::handle_syn(Message &msg) {
   uint32_t payload_size = msg.getSize();
 
   // Check if the app has the corresponding service in the BLE service scope
-  if (app_->HasSrv(msg.getService(), ServiceScope::SERVICE_SCOPE_BLE)) {
+  App &app = App::GetInstance();
+  if (app.HasSrv(msg.getService(), ServiceScope::SERVICE_SCOPE_BLE)) {
     ESP_LOGD(TAG, "Sync App Service: %d", msg.getService());
 
     // Clear the buffer if it is not empty
@@ -112,10 +113,11 @@ void MessageHandler::handle_ack(Message &msg) {
   ESP_LOG_BUFFER_HEX_LEVEL(TAG, requestBuffer_.data(), requestBuffer_.size(),
                            ESP_LOG_DEBUG);
 
-  if (app_->HasSrv(msg.getService(), ServiceScope::SERVICE_SCOPE_BLE)) {
-    length = app_->ExecSrvFromBle(msg.getService(), requestBuffer_.data(),
-                                  requestBuffer_.size(), handler->data,
-                                  MAX_MESSAGE_SIZE);
+  App &app = App::GetInstance();
+  if (app.HasSrv(msg.getService(), ServiceScope::SERVICE_SCOPE_BLE)) {
+    length = app.ExecSrvFromBle(msg.getService(), requestBuffer_.data(),
+                                requestBuffer_.size(), handler->data,
+                                MAX_MESSAGE_SIZE);
     sendResponse(msg, handler->data, length, BLE_FIN);
     ESP_LOGD(TAG, "BLE Message sent, service: 0x%02x, status: %d",
              msg.getService(), handler->data[0]);

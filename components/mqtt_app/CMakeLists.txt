@@ -10,6 +10,7 @@ idf_component_register(
   rpc
   utils
   PRIV_REQUIRES
+  esp_wifi
   app
   ble
   nvs_data

@@ -45,7 +45,7 @@ $ mkdir -p ~/esp
 $ cd ~/esp
 $ git clone --recursive https://github.com/espressif/esp-idf.git
 $ cd esp-idf
-$ git checkout v5.3.1
+$ git checkout v5.4
 ```
 
 ### Updating Submodules

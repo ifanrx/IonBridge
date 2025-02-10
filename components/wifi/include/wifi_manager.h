@@ -6,7 +6,6 @@
 #include <array>
 #include <cstdint>
 #include <string>
-#include <vector>
 
 #include "esp_err.h"
 #include "wifi.h"
@@ -14,6 +13,10 @@
 
 #define WIFI_SLOT_COUNT 64
 #define WIFI_SCAN_LIST_SIZE CONFIG_ESP_WIFI_SCAN_LIST_SIZE
+
+#ifdef CONFIG_WIFI_CONNECT_SET_BSSID
+#define WIFI_CONNECT_SET_BSSID
+#endif
 
 class WiFiManager {
  public:
@@ -40,7 +43,12 @@ class WiFiManager {
     return wifi_storage_.GetHash();
   }
   bool HasStoredWiFi() const;
-  void GetScanAps(ssid_info_t* aps) const;
+  esp_err_t ScanWiFi();
+  esp_err_t GetScanResult();
+  int GetScanAps(ssid_info_t* aps);
+#ifdef WIFI_CONNECT_SET_BSSID
+  bool GetBSSIDBySSID(const char* ssid, uint8_t bssid[6]);
+#endif
 
   uint16_t GetAssociationCount() const { return association_count_; }
   uint16_t GetDisassociationCount() const { return disassociation_count_; }
@@ -70,7 +78,7 @@ class WiFiManager {
   ~WiFiManager() = default;
 
   // Helper functions
-  esp_err_t ScanAndUpdateAvailableWiFi(
+  esp_err_t UpdateAvailableWiFi(
       std::array<ssid_info_t, WIFI_SCAN_LIST_SIZE>& aps);
   bool GetDefaultWiFiCredentials(char* ssid, char* passwd);
   bool GetNextWiFiEntry(char* ssid, char* passwd);

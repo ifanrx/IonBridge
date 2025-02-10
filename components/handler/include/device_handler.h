@@ -78,6 +78,9 @@ esp_err_t ManageFeatureToggle(AppContext &ctx,
 esp_err_t EnableReleaseMode(AppContext &ctx,
                             const std::vector<uint8_t> &request,
                             std::vector<uint8_t> &response);
+esp_err_t GetHardwareRevision(AppContext &ctx,
+                              const std::vector<uint8_t> &request,
+                              std::vector<uint8_t> &response);
 };  // namespace DeviceHandler
 
 namespace DeviceAuth {

@@ -10,6 +10,7 @@
 #include "esp_timer.h"
 #include "freertos/idf_additions.h"
 #include "freertos/projdefs.h"
+#include "ionbridge.h"
 #include "machine_info.h"
 #include "mqtt_message.h"
 #include "port.h"
@@ -20,8 +21,7 @@
 #include "strategy.h"
 #include "telemetry_task.h"
 
-#ifdef CONFIG_MCU_MODEL_SW3566
-#include "ionbridge.h"
+#if defined(CONFIG_MCU_MODEL_SW3566) || defined(CONFIG_MCU_MODEL_FAKE_SW3566)
 #include "rpc.h"
 #endif
 
@@ -111,7 +111,7 @@ esp_err_t PowerAllocator::Start() {
   return ESP_OK;
 }
 
-uint8_t PowerAllocator::AddApplyCount() {
+uint16_t PowerAllocator::AddApplyCount() {
   apply_count_++;
   if (apply_count_ >
       FAST_CHARGING_STRATEGY_REALLOCATION_APPLY_COUNT * apply_period_) {
@@ -151,7 +151,7 @@ void PowerAllocator::MqttTaskLoopWrapper(void *pvParameters) {
 }
 
 void PowerAllocator::TaskLoop() {
-  ESP_LOGI(TAG, "power_allocator task is starting");
+  ESP_LOGI(TAG, "Starting power_allocator");
   taskRunning_ = true;
   PowerAllocatorEvent event;
 
@@ -272,6 +272,21 @@ esp_err_t PowerAllocator::EnqueueEvent(PowerAllocatorEvent event) {
   return res;
 }
 
+esp_err_t PowerAllocator::EnqueueEvent(PowerAllocatorEventType event_type,
+                                       uint8_t port_id) {
+  if (!taskRunning_) {
+    ESP_LOGW(TAG,
+             "Enqueuing event %d while power_allocator task is not running",
+             static_cast<int>(event_type));
+    return ESP_ERR_INVALID_STATE;
+  }
+  PowerAllocatorEvent event = {
+      .event_type = event_type,
+      .port_id = port_id,
+  };
+  return EnqueueEvent(event);
+}
+
 void PowerAllocator::EnqueueMqttEvent(PowerAllocatorMqttEvent event) {
   // If the queue is full, drop the event
   BaseType_t res = xQueueSend(mqttQueue_, &event, EVENT_ENQUEUE_TIMEOUT);
@@ -312,6 +327,7 @@ void PowerAllocator::Execute() {
   static uint8_t prev_ports_connected_status = 0;
   static uint32_t executed = 0;
   uint8_t ports_connected_status = 0;
+
   if (OverTempLimitDetect()) {
     return;
   }
@@ -323,7 +339,9 @@ void PowerAllocator::Execute() {
 
   this->executing_ = true;
   executed++;
+
   bool switched = SwitchStrategy();
+
   if (power_allocation_enabled_ && switched) {
     ESP_LOGI(TAG, "Power strategy changed to %d, initializing power allocator",
              strategy_->Type());
@@ -345,13 +363,14 @@ void PowerAllocator::Execute() {
       ESP_LOGD(TAG, "Power strategy applied, execution count: %" PRIu32,
                executed);
       remaining_power = strategy_->Apply(port_manager_);
-    }
 
-    PowerAllocatorMqttEvent event = {
-        .event_type = PowerAllocatorMqttEventType::REPORT_STATS,
-    };
-    EnqueueMqttEvent(event);
+      PowerAllocatorMqttEvent event = {
+          .event_type = PowerAllocatorMqttEventType::REPORT_STATS,
+      };
+      EnqueueMqttEvent(event);
+    }
   }
+
   prev_ports_connected_status = ports_connected_status;
 
   if (!power_allocation_enabled_ && executed % 600 == 0 &&
@@ -384,7 +403,7 @@ void PowerAllocator::Reallocate() {
 void PowerAllocator::ReportPowerStats() {
   TelemetryTask *task = TelemetryTask::GetInstance();
   uint8_t adc_value = 0;
-#ifdef CONFIG_MCU_MODEL_SW3566
+#if defined(CONFIG_MCU_MODEL_SW3566) || defined(CONFIG_MCU_MODEL_FAKE_SW3566)
   ESP_ERROR_COMPLAIN(rpc::fpga::read_adc_value(&adc_value),
                      "fpga::read_adc_value");
 #else
@@ -421,12 +440,12 @@ bool PowerAllocator::SwitchStrategy() {
         type_ = TEMPORARY_ALLOCATOR;
         break;
       default:
-        ESP_LOGW(TAG, "Unsupported strategy type: %d",
-                 strategy_buffer_->Type());
+        ESP_LOGW(TAG, "Unsupported strategy: %d", strategy_buffer_->Type());
         strategy_buffer_.reset();  // Automatically deletes the strategy
         goto RET;
         break;
     }
+    strategy_->Teardown(port_manager_);
     strategy_ = std::move(strategy_buffer_);
     switched = true;
   }
@@ -484,12 +503,12 @@ bool PowerAllocator::OverTempLimitDetect() {
 
 PowerAllocator *AllocatorBuilder::Build() {
   PortManager &port_manager = PortManager::GetInstance();
-  PowerAllocator &allocator = PowerAllocator::GetInstance();
 
   for (uint8_t i = 0; i < port_count_; i++) {
     port_manager.InitializePort(i, ports_active_[i], strategy_->InitialPower());
   }
 
+  PowerAllocator &allocator = PowerAllocator::GetInstance();
   allocator.Configure(strategy_, cooldown_period_secs_, apply_period_,
                       timer_period_);
 
