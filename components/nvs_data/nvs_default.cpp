@@ -38,6 +38,7 @@ static const std::string nvs_key_names[NVS_KEY_INT(NVS_KEY_COUNT)] = {
     [NVS_KEY_INT(MQTT_CERT)] = "mqtt_cert",
     [NVS_KEY_INT(MQTT_KEY)] = "mqtt_key",
     [NVS_KEY_INT(MQTT_BROKER)] = "mqtt_broker",
+    [NVS_KEY_INT(MQTT_CUSTOM_BROKER)] = "mqtt_c_broker",
 
     [NVS_KEY_INT(DEVICE_TOKEN)] = "DEVICE_TOKEN",
 
@@ -138,6 +139,7 @@ static const std::string nvs_key_names[NVS_KEY_INT(NVS_KEY_COUNT)] = {
     [NVS_KEY_INT(WIFI_CREDENTIAL_62)] = "credential_62",
     [NVS_KEY_INT(WIFI_CREDENTIAL_63)] = "credential_63",
     [NVS_KEY_INT(WIFI_CREDENTIAL_64)] = "credential_64",
+    [NVS_KEY_INT(OTA_CONFIRM_RESULT)] = "confirm_res",
 };
 
 static uint8_t PORT_DEFAULT_PRIORITIES[5] = {5, 2, 3, 4, 1};
@@ -158,9 +160,9 @@ const std::unordered_map<NVSKey, ConfigValue> DEFAULT_CONFIG = {
 };
 
 std::string nvs_key_to_string(NVSKey key) {
-    int index = static_cast<int>(key);
-    if (index < 0 || index >= static_cast<int>(NVSKey::NVS_KEY_COUNT)) {
-        return "UNKNOWN_KEY";
-    }
-    return std::string(nvs_key_names[index]);
+  int index = static_cast<int>(key);
+  if (index < 0 || index >= static_cast<int>(NVSKey::NVS_KEY_COUNT)) {
+    return "UNKNOWN_KEY";
+  }
+  return std::string(nvs_key_names[index]);
 }

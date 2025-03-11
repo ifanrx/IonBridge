@@ -7,6 +7,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 
+#include <cstdint>
 #include <fstream>
 
 #include "esp_check.h"
@@ -14,6 +15,7 @@
 #include "esp_littlefs.h"
 #include "esp_log.h"
 #include "ionbridge.h"
+#include "mbedtls/md5.h"
 #include "sdkconfig.h"
 
 #define FILE_SYSTEM_BASE_PATH CONFIG_FILE_SYSTEM_BASE_PATH
@@ -145,8 +147,8 @@ FAIL:
 }
 
 esp_err_t Storage::GetUserAppPath(const char *version, char *path,
-                                  size_t pathSize) {
-  return GetFirmwarePath("SW3566", version, path, pathSize);
+                                  size_t path_size) {
+  return GetFirmwarePath("SW3566", version, path, path_size);
 }
 
 bool Storage::GetUserAppChecksum(uint32_t *checksum) {
@@ -203,14 +205,14 @@ FAIL:
 }
 
 esp_err_t Storage::GetFPGAFirmwarePath(const char *version, char *path,
-                                       size_t pathSize) {
-  return GetFirmwarePath("FPGA", version, path, pathSize);
+                                       size_t path_size) {
+  return GetFirmwarePath("FPGA", version, path, path_size);
 }
 
 esp_err_t Storage::GetFirmwarePath(const char *prefix, const char *version,
-                                   char *path, size_t pathSize) {
-  int res = snprintf(path, pathSize, FIRMWARE_PATH_TPL, prefix, version);
-  if (res < 0 || res >= pathSize) {
+                                   char *path, size_t path_size) {
+  int res = snprintf(path, path_size, FIRMWARE_PATH_TPL, prefix, version);
+  if (res < 0 || res >= path_size) {
     return ESP_ERR_INVALID_SIZE;
   }
   return ESP_OK;
@@ -275,4 +277,46 @@ esp_err_t Storage::RemoveOldVersionFile(const char *currentVersion,
   closedir(directory);
 
   return ESP_OK;
+}
+
+esp_err_t Storage::ComputeMD5(const char *path, char *hexdigest) {
+  std::ifstream file(path, std::ios::binary);
+  if (!(file && file.good())) {
+    ESP_LOGE(TAG, "Failed to open file: %s", path);
+    return ESP_FAIL;
+  }
+
+#define MD5_MAX_LEN 16
+
+  char buf[64];
+  uint8_t md5[MD5_MAX_LEN];
+  mbedtls_md5_context ctx;
+
+  mbedtls_md5_init(&ctx);
+  mbedtls_md5_starts(&ctx);
+
+  size_t read;
+  do {
+    file.read(buf, sizeof(buf));
+    if (file.bad()) {
+      ESP_LOGE(TAG, "Error reading file: %s", path);
+      mbedtls_md5_free(&ctx);
+      return ESP_FAIL;
+    }
+    read = file.gcount();
+    mbedtls_md5_update(&ctx, (const unsigned char *)buf, read);
+  } while (read == sizeof(buf));
+
+  mbedtls_md5_finish(&ctx, md5);
+  mbedtls_md5_free(&ctx);
+
+  for (int i = 0; i < MD5_MAX_LEN; i++) {
+    sprintf(hexdigest + i * 2, "%02x", md5[i]);
+  }
+  return ESP_OK;
+}
+
+bool Storage::Exists(const char *path) {
+  struct stat st;
+  return stat(path, &st) == 0;
 }

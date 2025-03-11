@@ -24,7 +24,6 @@
 #include "power_allocator.h"
 #include "power_config.h"
 #include "sdkconfig.h"
-#include "strategy.h"
 #include "syslog.h"
 #include "telemetry_task.h"
 #include "utils.h"
@@ -76,6 +75,7 @@ esp_err_t DeviceHandler::AssociateDevice(AppContext &ctx,
     ESP_LOGI(TAG, "Resetting user data");
     ESP_RETURN_ON_ERROR(ResetUserData(), TAG, "reset_user_data");
     WiFiManager::GetInstance().Reset();
+    wifi_controller.Abort();
     if (ctx.pAllocator.Type() == PowerAllocatorType::TEMPORARY_ALLOCATOR) {
       ctx.pAllocator.SetStrategy<PowerSlowChargingStrategy>();
     }
@@ -616,6 +616,16 @@ esp_err_t DeviceHandler::EnableReleaseMode(AppContext &ctx,
   return esp_efuse_disable_rom_download_mode();
 }
 
+esp_err_t DeviceHandler::GetHardwareRevision(
+    AppContext &ctx, const std::vector<uint8_t> &request,
+    std::vector<uint8_t> &response) {
+  char revision[8];
+  size_t size = sizeof(revision);
+  DeviceNVSGet(revision, &size, NVSKey::DEVICE_HARDWARE_REV);
+  response.insert(response.end(), revision, revision + size - 1);
+  return ESP_OK;
+}
+
 esp_err_t DeviceAuth::getPassword(uint8_t *password, size_t passwordSize) {
   if (password == nullptr || passwordSize != 4) {
     ESP_LOGW(TAG, "Invalid password buffer");
@@ -633,6 +643,7 @@ bool DeviceAuth::validatePassword(const uint8_t *payload, size_t payloadSize) {
   if (payload == nullptr || payloadSize != sizeof(password)) {
     ESP_LOGW(TAG, "Invalid payload, expected %d bytes, got %d bytes",
              sizeof(password), payloadSize);
+    ESP_LOG_BUFFER_HEXDUMP(TAG, payload, payloadSize, ESP_LOG_WARN);
     return false;
   }
   ESP_RETURN_FALSE_ON_ERROR(getPassword(password, sizeof(password)),

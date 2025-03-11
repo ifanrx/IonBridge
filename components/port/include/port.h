@@ -6,6 +6,7 @@
 #include <string>
 
 #include "data_types.h"
+#include "esp_err.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"  // IWYU pragma: keep
 #include "freertos/timers.h"
@@ -229,9 +230,9 @@ class PortCheckingState : public PortState,
   PortCheckingState() : PortState(PortStateType::CHECKING) {}
 
   TimerHandle_t checking_timer_ = nullptr;
-  void StartCheckingTimer(Port &port);
-  void StopCheckingTimer();
-  static void CheckingTimerCallback(TimerHandle_t timer);
+  void StartWatchdog(Port &port);
+  void StopWatchdog();
+  static void WatchdogCallback(TimerHandle_t timer);
 };
 
 class PortRecoveringState : public PortState,
@@ -309,6 +310,7 @@ class Port {
   bool Reinitialize();
   bool IsTypeA() const { return id_ == 0; }
   bool IsInitialized() const { return initialized_; }
+  bool IsAdjustable();
 
   void SetState(PortStateType type);
   void RevertToPreviousState() {
@@ -454,6 +456,8 @@ class Port {
   }
   size_t GetHistoricalStatsSize() const { return historical_stats_.Size(); }
 
+  esp_err_t EnableLimitedCurrentMode();
+  esp_err_t DisableLimitedCurrentMode();
   void EnterPowerLimiting();
   void ExitPowerLimiting();
   void Reboot();
@@ -472,5 +476,7 @@ class Port {
  private:
   void SetState(PortState *state);
 };
+
+void handle_port_config_compatibility(int i, PortConfig &config);
 
 #endif

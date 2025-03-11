@@ -33,6 +33,12 @@ esp_err_t GetWiFiRecords(AppContext &ctx, const std::vector<uint8_t> &request,
 esp_err_t OperateWiFiRecord(AppContext &ctx,
                             const std::vector<uint8_t> &request,
                             std::vector<uint8_t> &response);
+esp_err_t GetWiFiStateMachine(AppContext &ctx,
+                              const std::vector<uint8_t> &request,
+                              std::vector<uint8_t> &response);
+esp_err_t SetWiFiStateMachine(AppContext &ctx,
+                              const std::vector<uint8_t> &request,
+                              std::vector<uint8_t> &response);
 
 };  // namespace WiFiHandler
 

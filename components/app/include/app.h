@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -36,21 +37,26 @@ using SrvFunc = std::function<esp_err_t(
 
 class App {
  private:
-  AppContext m_ctx;
+  std::unique_ptr<AppContext> m_ctx;
   std::unordered_map<ServiceCommand, SrvFunc> m_ble_services;
   std::unordered_map<ServiceCommand, SrvFunc> m_mqtt_services;
 
-  // App(ESPController& controller, PowerAllocator& allocator, UARTClient&
-  // client);
+  App() = default;
+  ~App() = default;
+
+  bool is_initialized = false;
+
  public:
-  // App(const App&) = delete;
-  // App& operator=(const App&) = delete;
-  App(DeviceController &controller, PowerAllocator &pAllocator);
+  App(const App &) = delete;
+  App &operator=(const App &) = delete;
 
-  static App *m_instance;
-  static void Init(DeviceController &controller, PowerAllocator &pAllocator);
+  static App &GetInstance() {
+    static App instance;
+    return instance;
+  }
 
-  static App *GetInstance();
+  void Init(DeviceController &controller, PowerAllocator &pAllocator);
+  bool IsInitialized() { return is_initialized; }
 
   void String(const std::string &str, std::vector<uint8_t> &response);
 

@@ -4,6 +4,7 @@
 #include <cstdarg>
 
 #include "esp_err.h"
+#include "esp_log.h"
 #include "freertos/FreeRTOS.h"  // IWYU pragma: keep
 #include "freertos/semphr.h"
 #include "lwip/sockets.h"  // IWYU pragma: keep
@@ -65,6 +66,11 @@ class SyslogClient {
   int SendMessage(const char* format, va_list args);
 
   /**
+   * @brief Register syslog to esp log system
+   */
+  void Register();
+
+  /**
    * @brief Cleans up the SyslogClient by closing the socket.
    *        Call this during application shutdown.
    */
@@ -116,6 +122,7 @@ class SyslogClient {
   SemaphoreHandle_t syslog_mutex_;  // Mutex for thread safety
   TickType_t semaphore_timeout_;    // Timeout for waiting on the semaphore
   bool report_enabled_;             // Flag indicating if reporting is enabled
+  vprintf_like_t esp_printf_ = nullptr;  // Original esp printf function
 #endif
 };
 

@@ -18,6 +18,12 @@ enum StrategyType : uint8_t {
   UNKNOWN_STRATEGY = 0xFF,
 };
 
+enum StrategyStage : uint8_t {
+  STAGE_INIT = 0,
+  STAGE_UNDER_THRESHOLD = 1,
+  STAGE_OVER_THRESHOLD = 2
+};
+
 typedef struct {
   uint16_t power_allocation[NUM_PORTS];  // Array representing power allocation
                                          // for each port
@@ -38,6 +44,8 @@ class PowerStrategy {
   uint8_t max_power_ = POWER_BUDGET;
   // Safety margin for non-adjustable ports
   uint8_t safety_margin_ = 5;
+  uint64_t last_stage_switch_time_ = 0;
+  uint8_t strategy_stage_ = STAGE_INIT;
 
  protected:
   int64_t last_applied_time_;
@@ -60,6 +68,7 @@ class PowerStrategy {
   uint8_t HandleActualProvisioning(PortManager &port_manager,
                                    uint8_t total_usage);
   virtual void SetupInitialPower(PortManager &port_manager);
+  virtual void Teardown(PortManager &port_manager) {};
   uint8_t InitialPower() const { return initial_power_; }
   StrategyType Type() const { return stratege_type_; }
   void SetPowerBudget(uint8_t budget) {
@@ -74,6 +83,8 @@ class PowerStrategy {
     SetPowerBudget(max_power_ + increase);
   }
   uint8_t MaxPowerBudget() const { return max_power_; }
+  uint8_t Stage() const { return strategy_stage_; }
+  uint64_t LastStageSwitchTime() const { return last_stage_switch_time_; }
 };
 
 class PowerSlowChargingStrategy : public PowerStrategy {
@@ -84,6 +95,8 @@ class PowerSlowChargingStrategy : public PowerStrategy {
     initial_power_ = 20;
     stratege_type_ = SLOW_CHARGING;
   }
+  void SetupInitialPower(PortManager &port_manager) override;
+  void Teardown(PortManager &port_manager) override;
   int8_t Allocate(const Port &port, uint8_t remaining_power) override;
   uint8_t Apply(PortManager &port_manager) override;
 };

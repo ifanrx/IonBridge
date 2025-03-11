@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cinttypes>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -47,6 +48,8 @@
       return __VA_ARGS__;                              \
     }                                                  \
   } while (0)
+#define SET_BITS(original, mask, value) \
+  ((original) = ((original) & ~(mask)) | ((value) & (mask)))
 
 static const char* TAG = "PortManager";
 
@@ -90,7 +93,7 @@ void PortManager::TaskLoopWrapper(void* pvParameters) {
 }
 
 void PortManager::TaskLoop() {
-  ESP_LOGI(TAG, "Starting PortManager task");
+  ESP_LOGI(TAG, "Starting PortManager");
   PortManagerEvent event;
   while (eventQueue_ != nullptr) {
 #ifndef CONFIG_MCU_MODEL_FAKE_SW3566
@@ -104,14 +107,14 @@ void PortManager::TaskLoop() {
         } break;
 #endif
         case PortManagerEventType::TERMINATE_EVENT: {
-          ESP_LOGI(TAG, "Terminating PortManager task");
+          ESP_LOGI(TAG, "Terminating PortManager");
           vTaskDelete(nullptr);
           return;
         } break;
       }
     } else {
-      // timeout, update alived ports
-      this->UpdateAlivedPortsStage();
+      // timeout, update alive ports
+      this->UpdateAlivePortsStage();
     }
 #else
     for (Port& port : *this) {
@@ -212,7 +215,9 @@ esp_err_t PortManager::SetPortConfig(uint8_t port_id,
   // Directly assign the first byte
   ((uint8_t*)&features)[0] = ((uint8_t*)&config.features)[0];
   // Assign the first 6 bits of the second byte
-  ((uint8_t*)&features)[1] = ((uint8_t*)&config.features)[1] & 0x3F;
+  SET_BITS(((uint8_t*)&features)[1], 0x3F, ((uint8_t*)&config.features)[1]);
+  // Assign the first 1 bits of the third byte
+  SET_BITS(((uint8_t*)&features)[2], 0x01, ((uint8_t*)&config.features)[2]);
 
   port->UpdatePowerFeatures(features);
   return port->Reconnect();
@@ -250,6 +255,13 @@ uint8_t PortManager::GetActivePortCount() const {
   return static_cast<uint8_t>(std::count_if(
       ports_.begin(), ports_.end(),
       [](const std::unique_ptr<Port>& port) { return !port->Dead(); }));
+}
+
+uint8_t PortManager::GetAttachedAndAdjustablePortCount() const {
+  return static_cast<uint8_t>(std::count_if(
+      ports_.begin(), ports_.end(), [](const std::unique_ptr<Port>& port) {
+        return port->Attached() && port->IsAdjustable();
+      }));
 }
 
 uint32_t PortManager::GetChargingDurationSeconds() const {
@@ -333,6 +345,9 @@ void PortManager::HandleUARTMessage(const PortManagerEvent& event) {
     case SW3566Command::CHARGING_ALERT: {
       HandleChargingAlert(*port, uart_msg);
     } break;
+    case SW3566Command::KEEP_ALIVE: {
+      HandleKeepAliveMessage(*port, uart_msg);
+    } break;
     default: {
       ESP_LOGW(TAG, "Unhandled UART command: 0x%04x from port %d",
                uart_msg.command, port_id);
@@ -360,6 +375,8 @@ void PortManager::HandlePDStatusMessage(Port& port,
   size_t length = MIN(sizeof(PDStatusResponse), uart_msg.length);
   memcpy(&response, uart_msg.payload, length);
   if (response.status == GenericStatus::OK) {
+    ESP_LOGD(TAG, "Received PD_STATUS from port %d", port.Id());
+    ESP_LOG_BUFFER_HEXDUMP(TAG, uart_msg.payload, length - 1, ESP_LOG_DEBUG);
     port.SetPDStatus(response.data);
   }
 }
@@ -408,22 +425,29 @@ void PortManager::HandleChargingAlert(Port& port,
   memcpy(&alert, uart_msg.payload, length);
 
   ESP_LOGI(TAG,
-           "ChargingAlert[%d] soft_reset=%d, hard_reset=%d, "
-           "err=%d, cable_reset=%d"
-           "rebroadcast=%d, "
-           "rebroadcast_reason=%d, "
-           "usage=%d, output=%.2f, max_pwr=%d, watermark=%d, "
-           "gpio=%d",
-           port.Id(), alert.pd_rx_soft_reset, alert.pd_rx_hard_reset,
-           alert.pd_rx_error, alert.pd_rx_cable_reset, alert.rebroadcast,
-           alert.rebroadcast_reason, port.GetPowerUsage(),
+           "ChargingAlert[%d] hard_reset=%d, err=%d, cable_reset=%d, "
+           "rebroadcast=%d, rebroadcast_reason=%d, usage=%d, output=%.2f, "
+           "max_pwr=%d, watermark=%d, gpio=%d, rapid_recnt=%d",
+           port.Id(), alert.pd_rx_hard_reset, alert.pd_rx_error,
+           alert.pd_rx_cable_reset, alert.rebroadcast, alert.rebroadcast_reason,
+           port.GetPowerUsage(),
            static_cast<float>(alert.power_output * 3 * 8) / 1000000,
-           alert.max_power, alert.watermark, alert.gpio_toggled);
+           alert.max_power, alert.watermark, alert.gpio_toggled,
+           alert.rapid_reconnect);
 
-  pd_rx_soft_reset_count_ += alert.pd_rx_soft_reset;
   pd_rx_hard_reset_count_ += alert.pd_rx_hard_reset;
   pd_rx_error_count_ += alert.pd_rx_error;
   pd_rx_cable_reset_count_ += alert.pd_rx_cable_reset;
+}
+
+void PortManager::HandleKeepAliveMessage(Port& port,
+                                         const uart_message_t& uart_msg) {
+  KeepAliveResponse resp;
+  memcpy(&resp, uart_msg.payload, sizeof(KeepAliveResponse));
+  ESP_LOGI(TAG,
+           "KeepAlive from port %d, status: %d, uptime: %" PRIu32
+           "ms, reboot reason: 0x%" PRIX32,
+           port.Id(), resp.status, resp.uptimeMS, resp.rebootReason);
 }
 #endif
 

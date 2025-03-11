@@ -9,6 +9,7 @@
 #include "esp_log.h"
 #include "ionbridge.h"
 #include "machine_info.h"
+#include "utils.h"
 
 static const char *TAG = "BleHandler";
 
@@ -55,5 +56,12 @@ esp_err_t BleHandler::GetBleRSSI(AppContext &ctx,
   int8_t rssi = 0;
   ESP_RETURN_ON_ERROR(get_ble_conn_rssi(&rssi), TAG, "get_ble_conn_rssi");
   response.emplace_back(rssi);
+  return ESP_OK;
+}
+
+esp_err_t BleHandler::GetBleMTU(AppContext &ctx,
+                                const std::vector<uint8_t> &request,
+                                std::vector<uint8_t> &response) {
+  EMPLACE_BACK_INT16(response, get_ble_mtu());
   return ESP_OK;
 }

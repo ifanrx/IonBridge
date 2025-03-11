@@ -6,8 +6,9 @@
 #include "esp_err.h"
 #include "sdkconfig.h"
 
+#define HASH_LENGTH 32
 typedef struct {
-#ifdef CONFIG_MCU_MODEL_SW3566
+#if defined(CONFIG_MCU_MODEL_SW3566) || defined(CONFIG_MCU_MODEL_FAKE_SW3566)
   uint8_t sw3566_version[3];
   uint8_t fpga_version[3];
 #endif

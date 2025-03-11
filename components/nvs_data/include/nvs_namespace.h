@@ -25,6 +25,8 @@
 #define SYSLOG_NVS_NAMESPACE "syslog"
 #define WIFI_NAMESPACE "Wi-Fi"
 #define FPGA_NAMESPACE "fpga"
+#define OTA_NAMESPACE "ota"
+#define MQTT_CUSTOM_NAMESPACE "mqtt_custom"
 #ifdef CONFIG_ENABLE_RFTEST
 #define TEST_MODE_NAMESPACE "test_mode"
 #endif
@@ -173,6 +175,9 @@ class NVSNamespace {
 #define DeviceNVSGet(...)                                       \
   NVSNamespace::SGet(__VA_ARGS__, PROTECTED_DATA_NVS_PARTITION, \
                      DEVICE_DATA_NVS_NAMESPACE)
+#define DeviceNVSSet(...)                                       \
+  NVSNamespace::SSet(__VA_ARGS__, PROTECTED_DATA_NVS_PARTITION, \
+                     DEVICE_DATA_NVS_NAMESPACE)
 
 #define CertsNVSGet(...)                                        \
   NVSNamespace::SGet(__VA_ARGS__, PROTECTED_DATA_NVS_PARTITION, \
@@ -181,6 +186,18 @@ class NVSNamespace {
 #define MQTTNVSGet(...)                                         \
   NVSNamespace::SGet(__VA_ARGS__, PROTECTED_DATA_NVS_PARTITION, \
                      MQTT_NVS_NAMESPACE)
+
+#define UserMQTTNVSGet(...)                                \
+  NVSNamespace::SGet(__VA_ARGS__, USER_DATA_NVS_PARTITION, \
+                     MQTT_CUSTOM_NAMESPACE)
+
+#define UserMQTTNVSSet(...)                                \
+  NVSNamespace::SSet(__VA_ARGS__, USER_DATA_NVS_PARTITION, \
+                     MQTT_CUSTOM_NAMESPACE)
+
+#define UserMQTTNVSEraseKey(...)                                \
+  NVSNamespace::SEraseKey(__VA_ARGS__, USER_DATA_NVS_PARTITION, \
+                          MQTT_CUSTOM_NAMESPACE)
 
 #define BleNVSGet(...)                                     \
   NVSNamespace::SGet(__VA_ARGS__, USER_DATA_NVS_PARTITION, \
@@ -246,6 +263,15 @@ class NVSNamespace {
   NVSNamespace::SEraseKey(__VA_ARGS__, USER_DATA_NVS_PARTITION, WIFI_NAMESPACE)
 #define WifiNVSEraseAll() \
   NVSNamespace::SEraseAll(USER_DATA_NVS_PARTITION, WIFI_NAMESPACE)
+
+#define OTANVSGet(...) \
+  NVSNamespace::SGet(__VA_ARGS__, USER_DATA_NVS_PARTITION, OTA_NAMESPACE)
+#define OTANVSSet(...) \
+  NVSNamespace::SSet(__VA_ARGS__, USER_DATA_NVS_PARTITION, OTA_NAMESPACE)
+#define OTANVSEraseKey(...) \
+  NVSNamespace::SEraseKey(__VA_ARGS__, USER_DATA_NVS_PARTITION, OTA_NAMESPACE)
+#define OTANVSEraseAll() \
+  NVSNamespace::SEraseAll(USER_DATA_NVS_PARTITION, OTA_NAMESPACE)
 
 esp_err_t NVSGetAuthToken(uint8_t *token, bool always_generate_new = false);
 esp_err_t ResetUserData();

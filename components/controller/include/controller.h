@@ -19,6 +19,15 @@ enum DeviceControllerStatus : uint8_t {
   REQUESTING_CONFIRMATION,
 };
 
+typedef struct {
+#if defined(CONFIG_MCU_MODEL_SW3566) || defined(CONFIG_MCU_MODEL_FAKE_SW3566)
+  uint8_t sw3566_version[3];
+  uint8_t fpga_version[3];
+#endif
+  uint8_t esp32_version[3];
+  bool success;
+} ConfirmResult;
+
 class DeviceController {
   DeviceControllerStatus status_;
   esp_timer_handle_t confirmation_timer_ = nullptr, request_timer_ = nullptr;
@@ -29,9 +38,6 @@ class DeviceController {
   bool normally_booted_ = false;
 
   int64_t reboot_at_ = 0;
-
-  void start_request_timer(int timeout_ms);
-  void start_confirmation_timer(int timeout_ms);
 
  public:
   // Delete copy constructor and assignment operator
@@ -46,7 +52,7 @@ class DeviceController {
     return &instance;
   }
 
-  esp_err_t confirm(const uint8_t *hash, size_t hash_len = 32);
+  esp_err_t confirm();
   void waiting_for_confirmation();
   bool is_waiting_for_confirmation() {
     return status_ == DeviceControllerStatus::WAITING_FOR_CONFIRMATION;
@@ -71,6 +77,7 @@ class DeviceController {
            status_ == DeviceControllerStatus::REQUESTING_CONFIRMATION ||
            status_ == DeviceControllerStatus::WAITING_FOR_CONFIRMATION;
   };
+  void rollback_ota();
 
   // Power management
   esp_err_t power_off();

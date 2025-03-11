@@ -25,9 +25,10 @@ std::unique_ptr<NVSNamespace> NVSNamespace::Open(
 
   // If the namespace could not be opened, return nullptr
   if (!ns) {
-    ESP_LOGE(TAG, "Failed to open NVS namespace: %s/%s, error: %s",
+    esp_err_t err = partition.GetErrorCode();
+    ESP_LOGE(TAG, "Failed to open NVS namespace: %s/%s, error: %s(%d)",
              partition_name.c_str(), namespace_name.c_str(),
-             esp_err_to_name(partition.GetErrorCode()));
+             esp_err_to_name(err), err);
     return nullptr;
   }
 

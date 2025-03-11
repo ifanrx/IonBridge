@@ -3,6 +3,7 @@
 
 #include <array>
 #include <cstdint>
+#include <memory>
 #include <mutex>
 #include <string>
 
@@ -66,7 +67,7 @@ class MachineInfo {
   std::array<uint8_t, 3> mcu_version_;    // MCU Version
   std::array<uint8_t, 3> fpga_version_;   // FPGA Version
   std::array<uint8_t, 3> zrlib_version_;  // ZRLib Version
-  std::string country_code_;           // Current Country Code
+  std::string country_code_;              // Current Country Code
 
   // Mutex to ensure thread safety (if accessed by multiple threads)
   mutable std::mutex mutex_;

@@ -18,27 +18,12 @@
 
 static const char *TAG = "App";
 
-App *App::m_instance = nullptr;
-
 AppContext::AppContext(DeviceController &controller, PowerAllocator &pAllocator)
     : controller(controller), pAllocator(pAllocator) {}
 
-App::App(DeviceController &controller, PowerAllocator &pAllocator)
-    : m_ctx(controller, pAllocator) {}
-
 void App::Init(DeviceController &controller, PowerAllocator &pAllocator) {
-  if (m_instance != nullptr) {
-    ESP_LOGW(TAG, "App instance has already been created");
-    return;
-  }
-  m_instance = new App(controller, pAllocator);
-}
-
-App *App::GetInstance() {
-  if (m_instance == nullptr) {
-    ESP_LOGW(TAG, "App instance has not been created yet");
-  }
-  return m_instance;
+  m_ctx = std::make_unique<AppContext>(controller, pAllocator);
+  is_initialized = true;
 }
 
 void App::Srv(ServiceCommand command, SrvFunc func, ServiceScope scope) {
@@ -59,6 +44,10 @@ void App::Srv(ServiceCommand command, SrvFunc func, ServiceScope scope) {
 }
 
 bool App::HasSrv(uint8_t service, ServiceScope scope) {
+  if (!is_initialized) {
+    ESP_LOGW(TAG, "App is not initialized");
+    return false;
+  }
   ServiceCommand command = static_cast<ServiceCommand>(service);
   switch (scope) {
     case ServiceScope::SERVICE_SCOPE_BLE:
@@ -74,10 +63,14 @@ bool App::HasSrv(uint8_t service, ServiceScope scope) {
 }
 
 ResponseStatus App::PreCheckSrv(ServiceCommand command) {
+  if (!is_initialized) {
+    ESP_LOGW(TAG, "App is not initialized");
+    return ResponseStatus::FAILURE;
+  }
   if (!is_service_available_at_high_temp(command, true)) {
     return ResponseStatus::FLASH_NOT_WRITABLE_AT_HIGH_TEMPERATURE;
   }
-  if (!m_ctx.controller.is_power_on()) {
+  if (!m_ctx->controller.is_power_on()) {
     switch (command) {
       case ServiceCommand::SET_CHARGING_STRATEGY:
       case ServiceCommand::SET_STATIC_ALLOCATOR:
@@ -93,7 +86,7 @@ ResponseStatus App::PreCheckSrv(ServiceCommand command) {
         break;
     }
   }
-  if (m_ctx.controller.is_waiting_for_confirmation() &&
+  if (m_ctx->controller.is_waiting_for_confirmation() &&
       command == ServiceCommand::START_OTA) {
     ESP_LOGW(
         TAG,
@@ -144,6 +137,12 @@ void App::ProcessMQTTMessage(const char *data, int length) {
 
 void App::ExecSrvFromMQTT(uint8_t service, std::vector<uint8_t> &request,
                           std::vector<uint8_t> &response) {
+  if (!is_initialized) {
+    ESP_LOGW(TAG, "App is not initialized");
+    response.emplace_back(ResponseStatus::FAILURE);
+    return;
+  }
+
   // Retrieve the appropriate handler from the service mapping
   ServiceCommand command = static_cast<ServiceCommand>(service);
 
@@ -162,7 +161,7 @@ void App::ExecSrvFromMQTT(uint8_t service, std::vector<uint8_t> &request,
 
   // Obtain the corresponding handler
   auto handler = m_mqtt_services.at(command);
-  esp_err_t err = handler(m_ctx, request, response);
+  esp_err_t err = handler(*m_ctx, request, response);
   if (err != ESP_OK) {
     ESP_ERROR_COMPLAIN(err, "Failed to execute MQTT App service 0x%02x",
                        service);
@@ -182,6 +181,12 @@ void App::ExecSrvFromMQTT(uint8_t service, std::vector<uint8_t> &request,
 size_t App::ExecSrvFromBle(uint8_t service, uint8_t *payload,
                            size_t payloadSize, uint8_t *response,
                            size_t responseSize) {
+  if (!is_initialized) {
+    ESP_LOGW(TAG, "App is not initialized");
+    response[0] = ResponseStatus::FAILURE;
+    return 1;
+  }
+
   // Retrieve the handler from the service mapping
   ServiceCommand command = static_cast<ServiceCommand>(service);
 
@@ -205,7 +210,7 @@ size_t App::ExecSrvFromBle(uint8_t service, uint8_t *payload,
   // passing them to the business logic handlers
   std::vector<uint8_t> request(payload, payload + payloadSize);
   std::vector<uint8_t> data{};
-  esp_err_t err = handler(m_ctx, request, data);
+  esp_err_t err = handler(*m_ctx, request, data);
 
   // Check if the response size is too large; truncate if necessary
   if (data.size() > responseSize) {

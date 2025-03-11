@@ -18,6 +18,7 @@ bool ble_stop_advertising();
 bool ble_is_advertising();
 bool ble_is_connected();
 esp_err_t get_ble_conn_rssi(int8_t *rssi);
+uint16_t get_ble_mtu();
 
 esp_err_t start_ble_adv_task();
 void ble_adv_start();

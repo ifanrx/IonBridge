@@ -23,17 +23,8 @@ static const char *TAG = "PortStage";
 void PortActiveState::Handle(Port &port) {
   if (port.Attached()) {
     port.SetState(PortStateType::ATTACHED);
-    PowerAllocatorEvent event = {
-        .event_type = PowerAllocatorEventType::PORT_ATTACHED,
-        .port_id = port.Id(),
-    };
-    uint8_t retry_limit = 3;
-    while (retry_limit--) {
-      esp_err_t res = PowerAllocator::GetInstance().EnqueueEvent(event);
-      if (res == pdPASS) {
-        break;
-      }
-    }
+    PowerAllocator::GetInstance().EnqueueEvent(
+        PowerAllocatorEventType::PORT_ATTACHED, port.Id());
   }
 }
 
@@ -42,11 +33,8 @@ void PortAttachedState::Handle(Port &port) {
     ESP_LOGI(TAG, "Port %d is detached", port.Id());
     port.Reset();
     port.SetState(PortStateType::ACTIVE);
-    PowerAllocatorEvent event = {
-        .event_type = PowerAllocatorEventType::PORT_DETACHED,
-        .port_id = port.Id(),
-    };
-    PowerAllocator::GetInstance().EnqueueEvent(event);
+    PowerAllocator::GetInstance().EnqueueEvent(
+        PowerAllocatorEventType::PORT_DETACHED, port.Id());
   }
 }
 
@@ -131,14 +119,14 @@ void PortRecoveringState::Handle(Port &port) {
   esp_err_t ret = ESP_FAIL;
 #ifdef CONFIG_MCU_MODEL_SW3566
   KeepAliveStatus status;
-  ESP_GOTO_ON_ERROR(
-      rpc::mcu::keep_alive(port.Id(), &status), BRINGUP, TAG,
-      "Port %d isn't responding to keep-alive, trying to bring it up again",
-      port.Id());
+  ESP_GOTO_ON_ERROR(rpc::mcu::keep_alive(port.Id(), &status), BRINGUP, TAG,
+                    "Port %d is not responding to keep-alive. Attempting to "
+                    "bring it up",
+                    port.Id());
   ESP_GOTO_ON_FALSE(status == KeepAliveStatus::USER_APPLICATION_ALIVE,
                     ESP_ERR_INVALID_STATE, BRINGUP, TAG,
-                    "Port %d isn't in user application, trying to "
-                    "bring it up again",
+                    "Port %d is not in user application state, attempting to "
+                    "bring it up",
                     port.Id());
 
 RECOVERED:
@@ -153,7 +141,7 @@ RECOVERED:
 #ifdef CONFIG_MCU_MODEL_SW3566
 BRINGUP:
   ESP_GOTO_ON_ERROR(rpc::hard_reset_mcu(port.Id()), DEAD, TAG,
-                    "Unable to hard reset port %d", port.Id());
+                    "Failed to perform a hard reset on port %d.", port.Id());
   ret = rpc::mcu::bringup(port.Id(), true);
   if (ret == ESP_OK) {
     goto RECOVERED;
@@ -161,14 +149,14 @@ BRINGUP:
 #else
 #endif
 DEAD:
-  ESP_ERROR_COMPLAIN(ret, "Unable to resurrect port %d", port.Id());
+  ESP_ERROR_COMPLAIN(ret, "Failed to resurrect port %d.", port.Id());
   port.SetState(PortStateType::DEAD);
 }
 
 void PortCheckingState::Entering(Port &port) {
-  StopCheckingTimer();
+  StopWatchdog();
   enter_time_ = esp_timer_get_time();
-  StartCheckingTimer(port);
+  StartWatchdog(port);
 }
 
 void PortCheckingState::Handle(Port &port) {
@@ -181,32 +169,32 @@ void PortCheckingState::Handle(Port &port) {
 }
 
 void PortCheckingState::Exiting(Port &port) {
-  StopCheckingTimer();
+  StopWatchdog();
   enter_time_ = -1;
 }
 
-void PortCheckingState::StartCheckingTimer(Port &port) {
+void PortCheckingState::StartWatchdog(Port &port) {
   if (checking_timer_ != nullptr) {
-    ESP_LOGW(TAG, "Checking timer already started for port %d", port.Id());
+    ESP_LOGW(TAG, "Port watchdog has already started for port %d.", port.Id());
     return;
   }
   checking_timer_ =
-      xTimerCreate("checking_timer", pdMS_TO_TICKS(PORT_CHECKING_TIMER_MS),
-                   pdFALSE, (void *)&port, CheckingTimerCallback);
+      xTimerCreate("port_watchdog", pdMS_TO_TICKS(PORT_CHECKING_TIMER_MS),
+                   pdFALSE, (void *)&port, WatchdogCallback);
   xTimerStart(checking_timer_, 0);
-  ESP_LOGI(TAG, "Checking timer started for port %d", port.Id());
+  ESP_LOGI(TAG, "Port watchdog has started for port %d.", port.Id());
 }
 
-void PortCheckingState::StopCheckingTimer() {
+void PortCheckingState::StopWatchdog() {
   if (checking_timer_ != nullptr) {
     xTimerStop(checking_timer_, 0);
     xTimerDelete(checking_timer_, 0);
     checking_timer_ = nullptr;
-    ESP_LOGI(TAG, "Checking timer stopped");
+    ESP_LOGI(TAG, "Port watchdog stopped");
   }
 }
 
-void PortCheckingState::CheckingTimerCallback(TimerHandle_t timer) {
+void PortCheckingState::WatchdogCallback(TimerHandle_t timer) {
 #ifdef CONFIG_MCU_MODEL_SW3566
   Port *port = (Port *)pvTimerGetTimerID(timer);
   // Send the keep-alive message to the port
@@ -214,7 +202,7 @@ void PortCheckingState::CheckingTimerCallback(TimerHandle_t timer) {
   uint32_t uptime_ms;
   uint32_t reboot_reason;
   esp_err_t ret = ESP_OK;
-  ESP_LOGI(TAG, "Port %d checking timer callback started.", port->Id());
+  ESP_LOGI(TAG, "Port %d watchdog callback started.", port->Id());
   for (int i = 0; i < 3; i++) {
     ret = rpc::mcu::keep_alive(port->Id(), &status, &uptime_ms, &reboot_reason);
     if (ret == ESP_OK) {

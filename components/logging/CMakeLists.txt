@@ -7,6 +7,7 @@ idf_component_register(
   REQUIRES
   esp_ringbuf
   PRIV_REQUIRES
+  esp_wifi
   app
   nvs_data
   wifi)

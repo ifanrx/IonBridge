@@ -7,7 +7,9 @@ idf_component_register(
   esp_timer
   power
   PRIV_REQUIRES
+  app
   app_update
   mqtt_app
+  nvs_data
   task
   utils)

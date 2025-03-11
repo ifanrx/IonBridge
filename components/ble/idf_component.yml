@@ -16,3 +16,4 @@ dependencies:
   #   public: true
   esp_nimble_cpp:
     git: https://github.com/h2zero/esp-nimble-cpp
+    version: "2.1.0"

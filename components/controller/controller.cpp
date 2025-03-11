@@ -3,6 +3,8 @@
 #include <sys/_intsup.h>
 #include <sys/types.h>
 
+#include <cstdint>
+
 #include "data_types.h"
 #include "esp_check.h"
 #include "esp_err.h"
@@ -13,26 +15,23 @@
 #include "esp_system.h"
 #include "esp_timer.h"
 #include "ionbridge.h"
-#include "mqtt_app.h"
+#include "machine_info.h"
+#include "nvs_namespace.h"
 #include "power_allocator.h"
 #include "rpc.h"
 #include "sdkconfig.h"
-#include "telemetry_task.h"
-#include "utils.h"
 
 #define OTA_CONFIRM_REQUEST_TIMEOUT CONFIG_OTA_CONFIRM_REQUEST_TIMEOUT
 #define OTA_CONFIRM_REQUEST_INTERVAL CONFIG_OTA_CONFIRM_REQUEST_INTERVAL
 #define OTA_CONFIRM_TIMEOUT CONFIG_OTA_CONFIRM_TIMEOUT
+#define HASH_LENGTH 32
 
 static const char *TAG = "Controller";
-static uint32_t elapsed_time_ms = 0;
 
 void rollback() {
   ESP_LOGI(TAG, "Rolling back to previous app");
   if (esp_ota_mark_app_invalid_rollback_and_reboot() != ESP_OK) {
-    ESP_LOGE(TAG,
-             "esp_ota_mark_app_invalid_rollback_and_reboot failed, restarting");
-    esp_restart();
+    ESP_LOGE(TAG, "esp_ota_mark_app_invalid_rollback_and_reboot failed");
   }
 }
 
@@ -48,114 +47,56 @@ bool is_ota_pending_verify() {
   return ota_state == ESP_OTA_IMG_PENDING_VERIFY;
 }
 
-void confirmation_failed_cb(void *arg) {
-  ESP_LOGE(TAG, "Confirmation timed out, rolling back");
-  esp_err_t ret = ESP_ERR_TIMEOUT;
-  MQTTClient *client = MQTTClient::GetInstance();
-  TelemetryTask *task = TelemetryTask::GetInstance();
-  WAIT_FOR_CONDITION_OR_GOTO(10, client->Connected(), 100, ROLLBACK,
-                             "MQTT connection timeout, rolling back anyway");
-  if (task) {
-    task->ReportUpgradeError(ret);
-  }
-  client->Stop();  // Calling Stop to ensure that the MQTT messages are sent
-
-ROLLBACK:
-  rollback();
-}
-
-void request_timer_cb(void *arg) {
-  elapsed_time_ms += OTA_CONFIRM_REQUEST_INTERVAL;
-
-  DeviceController *controller = static_cast<DeviceController *>(arg);
-  // Check MQTT connection
-  MQTTClient *client = MQTTClient::GetInstance();
-  TelemetryTask *task = TelemetryTask::GetInstance();
-  if (client->Connected() && controller->is_normally_booted()) {
-    ESP_LOGI(TAG,
-             "MQTT connected and normally booted, requesting OTA confirmation");
-    // Send OTA confirmation request
-    task->ReportOTAConfirmInfo();
-    controller->waiting_for_confirmation();
-    return;
-  }
-
-  if (elapsed_time_ms >= OTA_CONFIRM_REQUEST_TIMEOUT) {
-    ESP_LOGE(TAG, "Confirmation request timed out, rollback to previous app");
-    esp_ota_mark_app_invalid_rollback_and_reboot();
-    return;
-  }
-
-  ESP_LOGW(TAG, "MQTT not connected, check again in %dms",
-           OTA_CONFIRM_REQUEST_INTERVAL);
-}
+void DeviceController::rollback_ota() { rollback(); }
 
 DeviceController::DeviceController() {
   if (is_ota_pending_verify()) {
     status_ = DeviceControllerStatus::REQUESTING_CONFIRMATION;
-    start_request_timer(OTA_CONFIRM_REQUEST_INTERVAL);
     return;
   }
   ESP_LOGD(TAG, "No OTA flag found");
   status_ = DeviceControllerStatus::POWER_UP;
 }
 
-void DeviceController::start_request_timer(int timeout_ms) {
-  ESP_LOGI(TAG, "Requesting OTA confirmation, timeout: %dms", timeout_ms);
-  esp_timer_create_args_t timer_config = {.callback = &request_timer_cb,
-                                          .arg = (void *)this,
-                                          .dispatch_method = ESP_TIMER_TASK,
-                                          .name = "REQUEST_CONFIRMATION_TIMER",
-                                          .skip_unhandled_events = true};
-  ESP_ERROR_CHECK_WITHOUT_ABORT(
-      esp_timer_create(&timer_config, &request_timer_));
-  ESP_ERROR_CHECK_WITHOUT_ABORT(
-      esp_timer_start_periodic(request_timer_, timeout_ms * 1000));
+static void save_confirm_result(bool success) {
+  ConfirmResult confirm_result = {.success = success};
+#if defined(CONFIG_MCU_MODEL_SW3566) || defined(CONFIG_MCU_MODEL_FAKE_SW3566)
+  std::array<uint8_t, 3> bp_version =
+      MachineInfo::GetInstance().GetMCUVersion();
+  std::copy(bp_version.begin(), bp_version.end(),
+            confirm_result.sw3566_version);
+  std::array<uint8_t, 3> fpga_version =
+      MachineInfo::GetInstance().GetFPGAVersion();
+  std::copy(fpga_version.begin(), fpga_version.end(),
+            confirm_result.fpga_version);
+#endif
+  std::array<uint8_t, 3> esp32_version =
+      MachineInfo::GetInstance().GetESP32Version();
+  std::copy(esp32_version.begin(), esp32_version.end(),
+            confirm_result.esp32_version);
+  ESP_ERROR_COMPLAIN(
+      OTANVSSet(reinterpret_cast<uint8_t *>(&confirm_result),
+                NVSKey::OTA_CONFIRM_RESULT, sizeof(ConfirmResult)),
+      "Failed to save OTA confirm result");
 }
 
-void DeviceController::start_confirmation_timer(int timeout_ms) {
-  ESP_LOGI(TAG, "Waiting for OTA confirmation, timeout: %dms", timeout_ms);
-  esp_timer_create_args_t timer_config = {.callback = &confirmation_failed_cb,
-                                          .arg = nullptr,
-                                          .dispatch_method = ESP_TIMER_TASK,
-                                          .name = "CONFIRM_TIMER",
-                                          .skip_unhandled_events = true};
-  ESP_ERROR_CHECK_WITHOUT_ABORT(
-      esp_timer_create(&timer_config, &confirmation_timer_));
-  ESP_ERROR_CHECK_WITHOUT_ABORT(
-      esp_timer_start_once(confirmation_timer_, timeout_ms * 1000));
-}
-
-void DeviceController::waiting_for_confirmation() {
-  ESP_ERROR_CHECK_WITHOUT_ABORT(esp_timer_stop(request_timer_));
-  status_ = DeviceControllerStatus::WAITING_FOR_CONFIRMATION;
-  start_confirmation_timer(OTA_CONFIRM_TIMEOUT);
-}
-
-esp_err_t DeviceController::confirm(const uint8_t *hash, size_t hash_len) {
+esp_err_t DeviceController::confirm() {
+  ESP_LOGI(TAG, "Confirming OTA");
   esp_err_t ret = ESP_OK;
-  TelemetryTask *task = TelemetryTask::GetInstance();
-  ESP_RETURN_ON_FALSE(
-      status_ == DeviceControllerStatus::WAITING_FOR_CONFIRMATION,
-      ESP_ERR_INVALID_STATE, TAG,
-      "Attempted to confirm OTA while not waiting for it");
-  ESP_GOTO_ON_FALSE(validate_partition_hash(hash, hash_len),
-                    ESP_ERR_INVALID_ARG, ROLLBACK, TAG, "Invalid hash");
+  uint8_t running_partition_hash[HASH_LENGTH];
+  const esp_partition_t *partition = esp_ota_get_running_partition();
+  ESP_GOTO_ON_ERROR(esp_partition_get_sha256(partition, running_partition_hash),
+                    ROLLBACK, TAG, "esp_partition_get_sha256");
   ESP_GOTO_ON_ERROR(esp_ota_mark_app_valid_cancel_rollback(), ROLLBACK, TAG,
                     "esp_ota_mark_app_valid_cancel_rollback");
-  ESP_ERROR_CHECK_WITHOUT_ABORT(esp_timer_stop(confirmation_timer_));
   ESP_LOGI(TAG, "OTA confirmed, powering up");
+  save_confirm_result(true);
   status_ = DeviceControllerStatus::POWER_UP;
-  if (task) {
-    task->ReportAllUpgradeInfo(true, false);
-  }
   return ret;
 
 ROLLBACK:
   ESP_LOGE(TAG, "Failed to confirm OTA, rolling back");
-  if (task) {
-    task->ReportAllUpgradeInfo(false, false);
-  }
+  save_confirm_result(false);
   rollback();
   return ret;
 }
@@ -201,6 +142,7 @@ void DeviceController::reboot() {
 esp_err_t DeviceController::set_display_intensity(uint8_t intensity) {
   ESP_RETURN_ON_ERROR(rpc::display::set_display_intensity(intensity), TAG,
                       "rpc::display::set_display_intensity");
+  ESP_LOGW(TAG, "Display intensity set to %d", intensity);
   display_intensity_ = intensity;
   return ESP_OK;
 }

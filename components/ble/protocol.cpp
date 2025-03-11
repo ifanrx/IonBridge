@@ -96,6 +96,9 @@ esp_err_t MessageFactory::createMessage(const uint8_t *data, size_t dataLength,
   }
 
   *msg = new Message(header, data + max_header_size, payload_size);
+  if (msg == nullptr) {
+    return ESP_ERR_NO_MEM;
+  }
   if (!(*msg)->validate()) {
     ESP_LOGW(TAG, "Received invalid message");
     return ESP_FAIL;

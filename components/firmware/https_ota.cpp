@@ -1,5 +1,7 @@
 #include "https_ota.h"
 
+#include <sys/types.h>
+
 #include <cinttypes>
 #include <cstdint>
 #include <cstdio>
@@ -106,7 +108,8 @@ static void get_sha256_of_partitions(void) {
   ESP_LOG_BUFFER_HEX(TAG, sha256, HASH_LEN);
 }
 
-static esp_err_t validate_image_header(esp_app_desc_t *new_app_info) {
+static esp_err_t validate_image_header(esp_app_desc_t *new_app_info,
+                                       bool force) {
   ESP_RETURN_ON_FALSE(new_app_info != NULL, ESP_ERR_INVALID_ARG, TAG,
                       "Null argument");
 
@@ -117,10 +120,10 @@ static esp_err_t validate_image_header(esp_app_desc_t *new_app_info) {
       "Error getting partition description");
   ESP_LOGI(TAG, "Current firmware version: %s", running_app_info.version);
 
-  ESP_RETURN_ON_FALSE(memcmp(new_app_info->version, running_app_info.version,
-                             sizeof(new_app_info->version)) != 0,
-                      ESP_FAIL, TAG,
-                      "Version unchanged. Update not proceeding.");
+  ESP_RETURN_ON_FALSE(
+      (force || memcmp(new_app_info->version, running_app_info.version,
+                       sizeof(new_app_info->version)) != 0),
+      ESP_FAIL, TAG, "Version unchanged. Update not proceeding.");
   ESP_LOGI(TAG, "New firmware version: %s", new_app_info->version);
 
   return ESP_OK;
@@ -153,14 +156,15 @@ static esp_err_t _decrypt_cb(decrypt_cb_arg_t *args, void *user_ctx) {
       ESP_ERR_OTA_VALIDATE_FAILED, TAG, "Invalid image");
   esp_app_desc_t *app_desc =
       (esp_app_desc_t *)(args->data_out + app_desc_offset);
-  ESP_RETURN_ON_ERROR(validate_image_header(app_desc), TAG,
+  ESP_RETURN_ON_ERROR(validate_image_header(app_desc, *(bool *)user_ctx), TAG,
                       "validate_image_header");
   return ESP_OK;
 }
 
 esp_err_t https_ota(const char *url, const char *cert_pem, const char *curr_ver,
-                    const char *new_ver) {
+                    const char *new_ver, bool force) {
   int progress = 0, prev_progress = 0;
+  uint8_t sha256[HASH_LEN] = {0};
   esp_err_t ret;
 
   // Ensure no concurrent OTA updates
@@ -193,7 +197,7 @@ esp_err_t https_ota(const char *url, const char *cert_pem, const char *curr_ver,
 #endif
 #ifdef CONFIG_ESP_HTTPS_OTA_DECRYPT_CB
   ota_config.decrypt_cb = _decrypt_cb;
-  ota_config.decrypt_user_ctx = NULL;
+  ota_config.decrypt_user_ctx = &force;
 #endif
 
   ESP_LOGI(TAG, "Downloading firmware from %s", config.url);
@@ -234,6 +238,10 @@ esp_err_t https_ota(const char *url, const char *cert_pem, const char *curr_ver,
   ESP_GOTO_ON_FALSE(esp_https_ota_is_complete_data_received(https_ota_handle),
                     ESP_ERR_NOT_FINISHED, OTA_FAILED, TAG,
                     "Full data was not received.");
+  // check ota partition sha256
+  ESP_GOTO_ON_ERROR(
+      esp_partition_get_sha256(esp_ota_get_next_update_partition(NULL), sha256),
+      OTA_FAILED, TAG, "Failed to get sha256 of OTA partition");
 
   ESP_GOTO_ON_ERROR(esp_https_ota_finish(https_ota_handle), OTA_FAILED, TAG,
                     "esp_https_ota_finish");

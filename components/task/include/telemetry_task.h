@@ -66,6 +66,7 @@ class TelemetryTask {
   void ReportDeviceBootInfo();
   void ReportMqttConnectionTime();
 
+  void ReportUpgradeResult();
   void ReportAllUpgradeInfo(bool confirmed, bool confirmed_timeout = false);
   void ReportUpgradeStart();
   void ReportUpgradeError(esp_err_t err);

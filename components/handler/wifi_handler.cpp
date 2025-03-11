@@ -11,8 +11,11 @@
 #include "machine_info.h"
 #include "sdkconfig.h"
 #include "telemetry_task.h"
+#include "utils.h"
 #include "wifi.h"
 #include "wifi_manager.h"
+
+#define SCAN_WAIT_MS 3000
 
 static const char *TAG = "WiFiHandler";
 static std::string wifi_ssid_, wifi_password_;
@@ -20,21 +23,19 @@ static std::string wifi_ssid_, wifi_password_;
 esp_err_t WiFiHandler::ScanWifi(AppContext &ctx,
                                 const std::vector<uint8_t> &request,
                                 std::vector<uint8_t> &response) {
-  static bool first = true;
   ESP_LOGI(TAG, "Scanning for WiFi networks");
   WiFiManager &wifi_manager = WiFiManager::GetInstance();
-  // TelemetryTask::GetInstance()->paused = true;
 
   ssid_info_t ssids[CONFIG_ESP_WIFI_SCAN_LIST_SIZE] = {};
-  if (first && !wifi_manager.HasStoredWiFi()) {
-    wifi_manager.GetScanAps(ssids);
-  } else {
-    // stop wifi data transfer
-    TelemetryTask::GetInstance()->Pause();
-    ESP_RETURN_ON_ERROR(wifi_scan_ap(ssids, true), TAG, "wifi_scan_ap");
-    TelemetryTask::GetInstance()->Resume();
+  // stop wifi data transfer
+  TelemetryTask::GetInstance()->Pause();
+  wifi_controller.StartScan();
+  DELAY_MS(SCAN_WAIT_MS);
+  if (wifi_controller.GetState() == WiFiStateType::SCANNING) {
+    DELAY_MS(SCAN_WAIT_MS);
   }
-  first = false;
+  wifi_manager.GetScanAps(ssids);
+  TelemetryTask::GetInstance()->Resume();
 
   int ap_count = 0;
   response.emplace_back(0);
@@ -96,7 +97,7 @@ esp_err_t WiFiHandler::SetWiFiPassword(AppContext &ctx,
   }
 
   wifi_password_.assign(request.begin(), request.end());
-  if (start_wifi_task(wifi_ssid_.c_str(), wifi_password_.c_str())) {
+  if (wifi_controller.SwitchWiFi(wifi_ssid_.c_str(), wifi_password_.c_str())) {
     return ESP_OK;
   }
 
@@ -173,7 +174,7 @@ esp_err_t WiFiHandler::SetWiFiSSIDAndPassword(
 
   ESP_LOGI(TAG, "Selected SSID: %s", wifi_ssid_.c_str());
 
-  if (start_wifi_task(wifi_ssid_.c_str(), wifi_password_.c_str())) {
+  if (wifi_controller.SwitchWiFi(wifi_ssid_.c_str(), wifi_password_.c_str())) {
     return ESP_OK;
   }
 
@@ -282,5 +283,26 @@ esp_err_t WiFiHandler::OperateWiFiRecord(AppContext &ctx,
     }
   }
 
+  return ESP_OK;
+}
+
+esp_err_t WiFiHandler::GetWiFiStateMachine(AppContext &ctx,
+                                           const std::vector<uint8_t> &request,
+                                           std::vector<uint8_t> &response) {
+  response.emplace_back(static_cast<uint8_t>(wifi_controller.GetState()));
+  return ESP_OK;
+}
+
+esp_err_t WiFiHandler::SetWiFiStateMachine(AppContext &ctx,
+                                           const std::vector<uint8_t> &request,
+                                           std::vector<uint8_t> &response) {
+  ESP_RETURN_ON_FALSE(request.size() == 1, ESP_ERR_INVALID_ARG, TAG,
+                      "Invalid request size");
+  uint8_t state = request[0];
+  if (state >= static_cast<uint8_t>(WiFiStateType::COUNT)) {
+    ESP_LOGW(TAG, "Invalid state");
+    return ESP_FAIL;
+  }
+  wifi_controller.SetState(static_cast<WiFiStateType>(state));
   return ESP_OK;
 }

@@ -46,24 +46,6 @@ esp_err_t TurnOnPort(AppContext &ctx, const std::vector<uint8_t> &request,
                      std::vector<uint8_t> &response);
 esp_err_t TurnOffPort(AppContext &ctx, const std::vector<uint8_t> &request,
                       std::vector<uint8_t> &response);
-esp_err_t SetPortOverclockFeature(AppContext &ctx,
-                                  const std::vector<uint8_t> &request,
-                                  std::vector<uint8_t> &response);
-esp_err_t GetPortOverclockFeature(AppContext &ctx,
-                                  const std::vector<uint8_t> &request,
-                                  std::vector<uint8_t> &response);
-esp_err_t SetPortTFCPFeature(AppContext &ctx,
-                             const std::vector<uint8_t> &request,
-                             std::vector<uint8_t> &response);
-esp_err_t GetPortTFCPFeature(AppContext &ctx,
-                             const std::vector<uint8_t> &request,
-                             std::vector<uint8_t> &response);
-esp_err_t SetPortUFCSFeature(AppContext &ctx,
-                             const std::vector<uint8_t> &request,
-                             std::vector<uint8_t> &response);
-esp_err_t GetPortUFCSFeature(AppContext &ctx,
-                             const std::vector<uint8_t> &request,
-                             std::vector<uint8_t> &response);
 esp_err_t SetStaticAllocator(AppContext &ctx,
                              const std::vector<uint8_t> &request,
                              std::vector<uint8_t> &response);

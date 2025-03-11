@@ -17,6 +17,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "ionbridge.h"
+#include "machine_info.h"
 #include "nvs.h"
 #include "nvs_default.h"
 #include "nvs_namespace.h"
@@ -313,110 +314,6 @@ esp_err_t PowerHandler::TurnOffPort(AppContext &ctx,
   return ctx.pAllocator.GetPortManager().TurnOffPort(port) ? ESP_OK : ESP_FAIL;
 }
 
-esp_err_t PowerHandler::SetPortOverclockFeature(
-    AppContext &ctx, const std::vector<uint8_t> &request,
-    std::vector<uint8_t> &response) {
-  if (request.size() != 2) {
-    ESP_LOGE(TAG, "Invalid request size: %d", request.size());
-    return ESP_ERR_INVALID_SIZE;
-  }
-
-  uint8_t port = request[0];
-
-  PowerFeatures features;
-  ESP_RETURN_ON_ERROR(rpc::mcu::get_power_features(port, &features), TAG,
-                      "sw3566::get_power_features port=%d", port);
-  features.EnableOverCompensation = bool(request[1]);
-  return rpc::mcu::set_power_features(port, features);
-}
-
-esp_err_t PowerHandler::GetPortOverclockFeature(
-    AppContext &ctx, const std::vector<uint8_t> &request,
-    std::vector<uint8_t> &response) {
-  if (request.size() != 1) {
-    ESP_LOGE(TAG, "Invalid request size: %d", request.size());
-    return ESP_ERR_INVALID_SIZE;
-  }
-
-  uint8_t port = request[0];
-
-  PowerFeatures features;
-  ESP_RETURN_ON_ERROR(rpc::mcu::get_power_features(port, &features), TAG,
-                      "sw3566::get_power_features port=%d", port);
-
-  response.emplace_back(features.EnableOverCompensation ? 1 : 0);
-  return ESP_OK;
-}
-
-esp_err_t PowerHandler::GetPortTFCPFeature(AppContext &ctx,
-                                           const std::vector<uint8_t> &request,
-                                           std::vector<uint8_t> &response) {
-  if (request.size() != 1) {
-    ESP_LOGE(TAG, "Invalid request size: %d", request.size());
-    return ESP_ERR_INVALID_SIZE;
-  }
-
-  uint8_t port = request[0];
-
-  PowerFeatures features;
-  ESP_RETURN_ON_ERROR(
-      ctx.pAllocator.GetPortManager().GetPortPowerFeatures(port, &features),
-      TAG, "getPortPowerFeatures");
-  response.emplace_back(features.EnableTfcp ? 1 : 0);
-  return ESP_OK;
-}
-
-esp_err_t PowerHandler::SetPortTFCPFeature(AppContext &ctx,
-                                           const std::vector<uint8_t> &request,
-                                           std::vector<uint8_t> &response) {
-  if (request.size() != 2) {
-    ESP_LOGE(TAG, "Invalid request size: %d", request.size());
-    return ESP_ERR_INVALID_SIZE;
-  }
-
-  uint8_t port = request[0];
-  PortManager &pm = ctx.pAllocator.GetPortManager();
-  PowerFeatures features;
-  ESP_RETURN_ON_ERROR(pm.GetPortPowerFeatures(port, &features), TAG,
-                      "getPortPowerFeatures");
-  features.EnableTfcp = bool(request[1]);
-  return pm.SetPortPowerFeatures(port, features);
-}
-
-esp_err_t PowerHandler::GetPortUFCSFeature(AppContext &ctx,
-                                           const std::vector<uint8_t> &request,
-                                           std::vector<uint8_t> &response) {
-  if (request.size() != 1) {
-    ESP_LOGE(TAG, "Invalid request size: %d", request.size());
-    return ESP_ERR_INVALID_SIZE;
-  }
-
-  uint8_t port = request[0];
-  PortManager &pm = ctx.pAllocator.GetPortManager();
-  PowerFeatures features;
-  ESP_RETURN_ON_ERROR(pm.GetPortPowerFeatures(port, &features), TAG,
-                      "getPortPowerFeatures");
-  response.emplace_back(features.EnableUfcs ? 1 : 0);
-  return ESP_OK;
-}
-
-esp_err_t PowerHandler::SetPortUFCSFeature(AppContext &ctx,
-                                           const std::vector<uint8_t> &request,
-                                           std::vector<uint8_t> &response) {
-  if (request.size() != 2) {
-    ESP_LOGE(TAG, "Invalid request size: %d", request.size());
-    return ESP_ERR_INVALID_SIZE;
-  }
-
-  uint8_t port = request[0];
-  PortManager &pm = ctx.pAllocator.GetPortManager();
-  PowerFeatures features;
-  ESP_RETURN_ON_ERROR(pm.GetPortPowerFeatures(port, &features), TAG,
-                      "getPortPowerFeatures");
-  features.EnableUfcs = bool(request[1]);
-  return pm.SetPortPowerFeatures(port, features);
-}
-
 static esp_err_t validate_power_allocation_table(
     PowerAllocator &pAllocator, const PowerAllocationTable &table) {
   PortManager &pm = pAllocator.GetPortManager();
@@ -493,16 +390,34 @@ esp_err_t PowerHandler::GetStaticAllocator(AppContext &ctx,
   return ESP_OK;
 }
 
+static int get_port_config_size(uint8_t version) {
+  switch (version) {
+    case 0:
+      return 3;
+    default:
+      return sizeof(PortConfig);
+  }
+}
+
 esp_err_t PowerHandler::SetPortConfig(AppContext &ctx,
                                       const std::vector<uint8_t> &request,
                                       std::vector<uint8_t> &response) {
-  if (request.size() != 1 + 8 * sizeof(PortConfig)) {
+  if (request.size() < 1 + 8) {
     ESP_LOGE(TAG, "Invalid SetPortConfigs request size: %d", request.size());
     return ESP_ERR_INVALID_SIZE;
   }
   uint8_t port_mask = request[0];
+  uint8_t version = request[1];
+  int config_size = get_port_config_size(version);
+  if (request.size() != 1 + 8 * config_size) {
+    ESP_LOGE(TAG, "Invalid SetPortConfigs request size: %d", request.size());
+    return ESP_ERR_INVALID_SIZE;
+  }
   PortConfig configs[8];
-  std::memcpy(&configs, &request[1], request.size() - 1);
+  for (int i = 0; i < 8; i++) {
+    std::memcpy(&configs[i], &request[1 + i * config_size], config_size);
+    handle_port_config_compatibility(i, configs[i]);
+  }
   PortManager &pm = ctx.pAllocator.GetPortManager();
   for (Port &port : pm) {
     if (((port_mask >> port.Id()) & 0x1) == 0) {
@@ -525,6 +440,11 @@ esp_err_t PowerHandler::SetPortConfig(AppContext &ctx,
 esp_err_t PowerHandler::GetPortConfig(AppContext &ctx,
                                       const std::vector<uint8_t> &request,
                                       std::vector<uint8_t> &response) {
+  uint8_t version = 0;
+  if (request.size() == 1) {
+    version = request[0];
+  }
+  int config_size = get_port_config_size(version);
   PortConfig configs[8] = {};
   size_t i = 0;
   for (const Port &port : ctx.pAllocator.GetPortManager()) {
@@ -539,11 +459,15 @@ esp_err_t PowerHandler::GetPortConfig(AppContext &ctx,
       }
     } else {
       ESP_RETURN_ON_ERROR(err, TAG, "Failed to get port %d config", i);
+      handle_port_config_compatibility(i, configs[i]);
     }
+    configs[i].version = version;
     i++;
   }
-  response.insert(response.end(), reinterpret_cast<uint8_t *>(configs),
-                  reinterpret_cast<uint8_t *>(configs) + sizeof(configs));
+  for (int i = 0; i < 8; i++) {
+    uint8_t *data_ptr = reinterpret_cast<uint8_t *>(&configs[i]);
+    response.insert(response.end(), data_ptr, data_ptr + config_size);
+  }
   return ESP_OK;
 }
 

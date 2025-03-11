@@ -44,7 +44,7 @@ esp_err_t start_upgrade_task(const firmware_version *new_version) {
                       "Upgrade already in progress");
   memcpy(&new_version_storage, new_version, sizeof(firmware_version));
   BaseType_t created =
-      xTaskCreate(upgrade_task, "upgrade_task", UPGRADE_TASK_STACK_SIZE,
+      xTaskCreate(upgrade_task, "upgrade", UPGRADE_TASK_STACK_SIZE,
                   (void *)&new_version_storage, UPGRADE_TASK_PRIORITY, nullptr);
   if (created == pdPASS) {
     upgrade_in_progress = true;
@@ -112,8 +112,8 @@ void upgrade_task(void *arg) {
              current_sw3566_version.toString().c_str(),
              new_sw3566_version.toString().c_str(), new_version.force);
 
-    AnimationController::GetInstance().set_animation(
-        AnimationId::DOWNLOAD_STAGE1, LoopMode::FOREVER);
+    AnimationController::GetInstance().StartAnimation(
+        AnimationId::DOWNLOAD_STAGE1, true);
 
     is_upgrade_required = true;
     type = FIRMWARE_TYPE_SW3566;
@@ -132,8 +132,8 @@ void upgrade_task(void *arg) {
              current_fpga_version.toString().c_str(),
              new_fpga_version.toString().c_str(), new_version.force);
 
-    AnimationController::GetInstance().set_animation(
-        AnimationId::DOWNLOAD_STAGE2, LoopMode::FOREVER);
+    AnimationController::GetInstance().StartAnimation(
+        AnimationId::DOWNLOAD_STAGE2, true);
 
     is_upgrade_required = true;
     type = FIRMWARE_TYPE_FPGA;
@@ -153,8 +153,8 @@ void upgrade_task(void *arg) {
              current_esp32_version.toString().c_str(),
              new_esp32_version.toString().c_str(), new_version.force);
 
-    AnimationController::GetInstance().set_animation(
-        AnimationId::DOWNLOAD_STAGE1, LoopMode::FOREVER);
+    AnimationController::GetInstance().StartAnimation(
+        AnimationId::DOWNLOAD_STAGE3, true);
 
     is_upgrade_required = true;
     type = FIRMWARE_TYPE_ESP32;
@@ -163,7 +163,7 @@ void upgrade_task(void *arg) {
 
     ESP_GOTO_ON_ERROR(
         https_ota(url, cert_buffer, current_esp32_version.toString().c_str(),
-                  new_esp32_version.toString().c_str()),
+                  new_esp32_version.toString().c_str(), new_version.force),
         UPGRADE_FAILED, TAG, "ESP32 OTA failed");
 
     ESP_LOGI(TAG, "ESP32 upgraded successfully");

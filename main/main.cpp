@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <set>
 #include <string>
@@ -17,6 +18,7 @@
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_ota_ops.h"
+#include "esp_pm.h"
 #include "esp_system.h"
 #include "esp_task_wdt.h"
 #include "esp_timer.h"
@@ -29,6 +31,7 @@
 #include "nvs_default.h"
 #include "nvs_namespace.h"
 #include "nvs_partition.h"
+#include "port.h"
 #include "port_manager.h"
 #include "power_allocator.h"
 #include "power_config.h"
@@ -51,8 +54,14 @@
 #endif
 
 #include "mqtt_app.h"
+#define MQTT_MAX_RECONNECT_ATTEMPTS CONFIG_MQTT_MAX_RECONNECT_ATTEMPTS
+#define MQTT_APP_STABLE_CONNECTION_DURATION 10 * 60 * 1e6
 #ifdef CONFIG_ENABLE_RESTART_MQTT_CLIENT
 #define ENABLE_RESTART_MQTT_CLIENT
+#endif
+
+#ifdef CONFIG_ENABLE_TEMP_MONITOR
+#define ENABLE_TEMP_MONITOR
 #endif
 
 #ifdef CONFIG_INTERFACE_TYPE_UART
@@ -73,7 +82,7 @@
 #define SW3566_FIRMWARE_NUMERIC_VERSION CONFIG_SW3566_FIRMWARE_NUMERIC_VERSION
 #define FPGA_FIRMWARE_NUMERIC_VERSION CONFIG_FPGA_FIRMWARE_NUMERIC_VERSION
 
-#ifdef CONFIG_SKIP_3566_UPGRADE
+#if defined(CONFIG_SKIP_3566_UPGRADE) || defined(CONFIG_DEVICE_HUMMING_BOARD)
 #define SKIP_3566_UPGRADE true
 #else
 #define SKIP_3566_UPGRADE false
@@ -173,8 +182,12 @@ void set_port_configs() {
     esp_err_t err =
         PowerNVSGet(reinterpret_cast<uint8_t *>(&config), &size, keys[i]);
     if (err == ESP_OK) {
+      handle_port_config_compatibility(i, config);
       pm.SetPortConfig(port, config);
-    } else if (err != ESP_ERR_NVS_NOT_FOUND) {
+    } else if (err == ESP_ERR_NVS_NOT_FOUND) {
+      pm.SetPortConfig(port,
+                       i == 0 ? default_port_a_config : default_port_config);
+    } else {
       ESP_ERROR_COMPLAIN(err, "PowerNVSData::GetPortConfig: %d", i);
     }
   }
@@ -286,33 +299,34 @@ esp_err_t set_mac_address() {
 
 void heap_caps_alloc_failed_hook(size_t requested_size, uint32_t caps,
                                  const char *function_name) {
+  static bool memory_exceeded = false;
   // Log warning message with allocation details
   ESP_LOGW(TAG,
-           "Heap allocation failure: caller: %s, requested: %d, caps: %" PRIu32,
-           function_name, (int)requested_size, caps);
+           "Heap alloc failed: caller: %s, requested: %d, caps: %" PRIu32
+           ", free: %" PRIu32,
+           function_name, (int)requested_size, caps, esp_get_free_heap_size());
   MQTTClient::GetInstance()->SetLowMemoryMark();
   // Only available in serial console
   heap_caps_print_heap_info(caps);
-  static bool memory_exceeded = false;
-  uint32_t freeHeapSize = esp_get_free_heap_size();
+  multi_heap_info_t info;
+  heap_caps_get_info(&info, caps);
+  uint32_t freeHeapSize = info.total_free_bytes;
   if (freeHeapSize <= CONFIG_MEMORY_ALERT_THRESHOLD_BYTES && !memory_exceeded) {
-    uint32_t freeInternalHeapSize = esp_get_free_internal_heap_size();
-    uint32_t minimumFreeHeapSize = esp_get_minimum_free_heap_size();
     OutOfMemoryAlertInfo data;
     data.header = {
         .service = TelemetryServiceCommand::OUT_OF_MEMORY_ALERT,
         .message_id = TelemetryTask::GetInstance()->GetMessageId(),
     };
     data.freeHeapSize = freeHeapSize;
-    data.freeInternalHeapSize = freeInternalHeapSize;
-    data.minimumFreeHeapSize = minimumFreeHeapSize;
+    data.freeInternalHeapSize = esp_get_free_internal_heap_size();
+    data.minimumFreeHeapSize = info.minimum_free_bytes;
     data.thresholdFreeHeapSize = CONFIG_MEMORY_ALERT_THRESHOLD_BYTES;
     ESP_LOGW(TAG,
              "OOM: threshold: %d, free heap size: %" PRIu32
              ", free internal heap size: %" PRIu32
              ", minimum free heap size: %" PRIu32,
              CONFIG_MEMORY_ALERT_THRESHOLD_BYTES, freeHeapSize,
-             freeInternalHeapSize, minimumFreeHeapSize);
+             data.freeInternalHeapSize, data.minimumFreeHeapSize);
 
     ESP_ERROR_COMPLAIN(MQTTClient::GetInstance()->Publish(data.serialize(), 1),
                        "Publish OutOfMemoryAlertInfo");
@@ -462,11 +476,15 @@ static void update_fake_mode() {
 static void start_boot_animation() {
   ESP_LOGI(TAG, "Creating boot animation");
   animationController = &AnimationController::GetInstance();
-  animationController->start_task();
-  animationController->set_animation(AnimationId::BOOT_APP, LoopMode::ONCE);
+  animationController->StartTask();
+  animationController->StartAnimation(AnimationId::BOOT_APP, false);
 }
 
 void app_main() {
+  static const esp_pm_config_t pm_config = {
+      .max_freq_mhz = 160,
+      .min_freq_mhz = 80,
+  };
   esp_err_t ret __attribute__((unused));
 #if !CONFIG_ESP_TASK_WDT_INIT
   // If the TWDT was not initialized automatically on startup,
@@ -476,7 +494,7 @@ void app_main() {
       .idle_core_mask = (1 << portNUM_PROCESSORS) - 1,  // Bitmask of all cores
       .trigger_panic = true,
   };
-  ESP_ERROR_CHECK(esp_task_wdt_init(&twdt_config));
+  ESP_ERROR_COMPLAIN(esp_task_wdt_init(&twdt_config), "esp_task_wdt_init");
   ESP_LOGI(TAG, "TWDT initialized");
   xTaskCreate(feed_watchdog_task, "wdg", 1.5 * 1024, NULL, 17, nullptr);
 #endif  // CONFIG_ESP_TASK_WDT_INIT
@@ -485,7 +503,7 @@ void app_main() {
 
   // Initialize NVS partitions
   ESP_GOTO_ON_ERROR(NVSPartition::Init(), AFTER_NVS_INIT, TAG,
-                    "NVSPartition::Init failed");
+                    "NVSPartition::Init");
   set_mac_address();
   machine_info.LoadFromStorage();
   machine_info.PrintInfo();
@@ -493,16 +511,17 @@ void app_main() {
   controller = DeviceController::GetInstance();
 
 AFTER_NVS_INIT:
-  ESP_ERROR_COMPLAIN(Storage::Init(), "Storage::Init failed");
+  ESP_ERROR_COMPLAIN(Storage::Init(), "Storage::Init");
 
 #ifdef CONFIG_ENABLE_RFTEST
   cert_test();
 #endif
 
-  ESP_ERROR_COMPLAIN(start_ble_adv_task(), "Unable to start BLE ADV task");
+  ESP_ERROR_COMPLAIN(esp_pm_configure(&pm_config), "esp_pm_configure");
+  ESP_ERROR_COMPLAIN(start_ble_adv_task(), "start_ble_adv_task");
 
 #ifdef CONFIG_ENABLE_GLOBAL_LOGGING_COLLECTOR
-  esp_log_set_vprintf(SyslogClient::LogToStdout);
+  SyslogClient::GetInstance().Register();
 #endif
 
   PortManager::GetInstance().StartTask();
@@ -517,12 +536,12 @@ AFTER_NVS_INIT:
 
   if (!comm_interface_initialized) {
     // Rollback
-    ESP_LOGW(TAG, "Communication interface initialize failed, rolling back");
+    ESP_LOGW(TAG, "Failed to initialize communication interface; rolling back");
     if (controller->is_in_ota()) {
-      ESP_LOGW(TAG, "In OTA, rolling back anyway");
+      ESP_LOGW(TAG, "In OTA mode; rolling back");
       esp_ota_mark_app_invalid_rollback_and_reboot();
     } else {
-      ESP_LOGW(TAG, "Not in OTA, not rolling back");
+      ESP_LOGW(TAG, "Not in OTA mode; not rolling back");
     }
   } else {
     start_boot_animation();
@@ -534,8 +553,8 @@ AFTER_NVS_INIT:
    * to initialize.
    * If not, Wi-Fi task would be running without any animation.
    */
-  ESP_ERROR_COMPLAIN(wifi_initialize(), "Unable to initialize Wi-Fi");
-  start_wifi_task();
+  ESP_ERROR_COMPLAIN(wifi_initialize(), "wifi_initialize");
+  WiFiController::StartTask();
 
   // Boot chips concurrently with Wi-Fi task. This will save some time.
   if (comm_interface_initialized) {
@@ -543,43 +562,81 @@ AFTER_NVS_INIT:
     if (!boot_chips()) {
       ESP_LOGE(TAG, "All chips are dead, rolling back.");
       if (controller->is_in_ota()) {
-        ESP_LOGW(TAG, "In OTA, rolling back anyway");
+        ESP_LOGW(TAG, "In OTA mode; rolling back");
         esp_ota_mark_app_invalid_rollback_and_reboot();
       } else {
-        ESP_LOGW(TAG, "Not in OTA, not rolling back");
+        ESP_LOGW(TAG, "Not in OTA mode; not rolling back");
       }
     } else {
-      set_port_configs();
+      if (controller->is_in_ota()) {
+        ret = controller->confirm();
+        if (ret != ESP_OK) {
+          ESP_LOGE(TAG, "Failed to confirm OTA, rolling back");
+          controller->rollback_ota();
+        }
+      }
 #ifdef ENABLE_POWER_ALLOCATOR
       start_allocator();
 #endif  // ENABLE_POWER_ALLOCATOR
+      set_port_configs();
     }
   }
 
   report_startup_status();
 
   // 初始化 App 服务
-  App::Init(*controller, *pAllocator);
-  Handler::RegisterAllServices(*App::GetInstance());
+  App &app = App::GetInstance();
+  app.Init(*controller, *pAllocator);
+  Handler::RegisterAllServices(app);
 
-  xTaskCreate(handle_ble_messages_task, "BLE", CONFIG_BLE_TASK_STACK_SIZE,
+  xTaskCreate(handle_ble_messages_task, "ble", CONFIG_BLE_TASK_STACK_SIZE,
               controller, 1, nullptr);
 
 #ifdef ENABLE_FPGA_ADC_MONITOR
   int64_t last_time = esp_timer_get_time(), first_time = last_time, now = 0;
 #endif
 
+  uint8_t mqtt_reconnect_count = 0;
+  bool mqtt_destroyed = false;
   while (true) {
     DELAY_MS(1 * 1000);
 
-    if (is_internet_accessible()) {
-      MQTTClient::GetInstance()->Start();
-    }
-
     if (controller->should_reboot()) {
       ESP_LOGW(TAG, "should_reboot requested, rebooting");
+#if CONFIG_MCU_MODEL_SW3566
+      for (uint8_t i = 0; i < NUM_PORTS; i++) {
+        ESP_ERROR_COMPLAIN(rpc::fpga::toggle_mcu_gpio(i),
+                           "Failed to toggle mcu %d gpio", i);
+      }
+#endif
       esp_restart();
     }
+
+#ifdef CONFIG_ENABLE_MQTT
+    MQTTClient *mqtt = MQTTClient::GetInstance();
+    if (mqtt_destroyed && wifi_controller.GetState() == WiFiStateType::IDLE) {
+      mqtt->Start();
+      mqtt_destroyed = false;
+      continue;
+    }
+
+    if (!mqtt->NeedDestroy()) {
+      continue;
+    }
+
+    if (mqtt->GetConnectionDuration() > MQTT_APP_STABLE_CONNECTION_DURATION) {
+      mqtt_reconnect_count = 0;
+    } else if (mqtt_reconnect_count >= MQTT_MAX_RECONNECT_ATTEMPTS) {
+      wifi_controller.Notify(WiFiEventType::MQTT_DISCONNECTED);
+      mqtt_reconnect_count = 0;
+      continue;
+    }
+
+    mqtt_reconnect_count++;
+    ESP_LOGI(TAG, "MQTT reconnect attempts: %d", mqtt_reconnect_count);
+    MQTTClient::DestroyInstance();
+    mqtt_destroyed = true;
+#endif
 
 #ifdef ENABLE_AUTO_STREAM_DATA
     TelemetryTask::GetInstance()->SubscribeTelemetryStream();

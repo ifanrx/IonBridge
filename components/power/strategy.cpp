@@ -12,6 +12,7 @@
 #include <cstdlib>
 #include <limits>
 
+#include "data_types.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "port.h"
@@ -50,13 +51,6 @@ static std::array<MovingAverage, NUM_PORTS> ma_calculator = {MovingAverage()};
 static bool ignore_budget_increase = true;
 static std::array<uint64_t, NUM_PORTS> last_budget_set_time = {0};
 static uint8_t threshold = 0;
-
-enum StrategyStage : uint8_t {
-  STAGE_INIT = 0,
-  STAGE_UNDER_THRESHOLD = 1,
-  STAGE_OVER_THRESHOLD = 2
-};
-uint8_t strategy_stage = STAGE_INIT;
 
 PowerStrategy::PowerStrategy(uint32_t cooldown_period_secs) {
   cooldown_period_us_ = cooldown_period_secs * 1e6;
@@ -138,18 +132,19 @@ uint8_t PowerStrategy::HandleActualProvisioning(PortManager &pm,
   power_reduction_per_port =
       (total_usage - max_power_ + attached_port_count - 1) /
       attached_port_count;
-  ESP_LOGW(TAG,
-           "Current power usage of %dW exceeds the maximum power of %dW. "
-           "Number of attached ports: %d. Reducing power by %dW per port.",
-           total_usage, max_power_, attached_port_count,
-           power_reduction_per_port);
+  ESP_LOGW(
+      TAG,
+      "The current power usage of %dW exceeds the maximum allowed power "
+      "of %dW. Number of attached ports: %d. Reducing power by %dW per port.",
+      total_usage, max_power_, attached_port_count, power_reduction_per_port);
+
   for (Port &port : pm) {
     if (adjusted_ports & (1 << port.Id())) {
       continue;
     }
     bool attached = attached_ports & (1 << port.Id());
     if (attached) {
-      ESP_LOGI(TAG, "Reducing power cap for attached port %d by %dW (CAP: %dW)",
+      ESP_LOGI(TAG, "Reducing power cap for attached port %d by %dW (Cap: %dW)",
                port.Id(), power_reduction_per_port, port.MaxPowerBudget());
       if (port.DecreasePowerBudget(power_reduction_per_port)) {
         adjusted_ports |= (1 << port.Id());
@@ -204,6 +199,28 @@ static uint8_t apply_static_allocation(
     }
   }
   return 0;
+}
+
+void PowerSlowChargingStrategy::SetupInitialPower(PortManager &pm) {
+  for (Port &port : pm.GetAlivePorts()) {
+    PowerFeatures features;
+    port.GetPowerFeatures(&features);
+    features.EnablePdPPS = false;
+    features.EnablePdEPR = false;
+    port.UpdatePowerFeatures(features);
+    port.Reset();
+    port.ApplyMaxPowerBudget(initial_power_);
+  }
+}
+
+void PowerSlowChargingStrategy::Teardown(PortManager &pm) {
+  for (Port &port : pm.GetAlivePorts()) {
+    PowerFeatures features;
+    port.GetPowerFeatures(&features);
+    features.EnablePdPPS = true;
+    features.EnablePdEPR = true;
+    port.UpdatePowerFeatures(features);
+  }
 }
 
 uint8_t PowerSlowChargingStrategy::Apply(PortManager &pm) {

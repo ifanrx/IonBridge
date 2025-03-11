@@ -147,6 +147,12 @@ config DEVICE_MODEL_VALUE
     help
         Specify the new device model value for the PCB (max length: 7 characters).
 
+config DEVICE_HUMMING_BOARD
+    bool "Device is a Humming Board"
+    default n
+    help
+        Enable this option if the device is a humming board.
+
 # Master switch to enable all ports
 config ALL_PORTS_ENABLED
     bool "Enable All Ports"

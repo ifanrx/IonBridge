@@ -16,6 +16,8 @@ esp_err_t SetBleState(AppContext &ctx, const std::vector<uint8_t> &request,
                       std::vector<uint8_t> &response);
 esp_err_t GetBleRSSI(AppContext &ctx, const std::vector<uint8_t> &request,
                      std::vector<uint8_t> &response);
+esp_err_t GetBleMTU(AppContext &ctx, const std::vector<uint8_t> &request,
+                    std::vector<uint8_t> &response);
 };  // namespace BleHandler
 
 #endif

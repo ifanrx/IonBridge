@@ -6,6 +6,12 @@ config FIRMWARE_DOWNLOAD_ENDPOINT
     help
         Firmware download endpoint
 
+config FIRMWARE_CHECKSUM_DOWNLOAD_ENDPOINT
+    string "Firmware checksum download endpoint"
+    default ""
+    help
+        Firmware checksum download endpoint
+
 config FIRMWARE_DOWNLOAD_RECV_TIMEOUT
     int "Firmware download receive timeout (ms)"
     default 30000

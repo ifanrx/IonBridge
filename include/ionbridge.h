@@ -10,13 +10,13 @@
     (const char *)str;                                                      \
   })
 
-#define ESP_ERROR_COMPLAIN(x, format, ...)                                   \
-  do {                                                                       \
-    esp_err_t err_rc_ = (x);                                                 \
-    if (unlikely(err_rc_ != ESP_OK)) {                                       \
-      ESP_LOGE(TAG, "%s(%d) error %d: %s - " format, __FUNCTION__, __LINE__, \
-               err_rc_, esp_err_to_name(err_rc_), ##__VA_ARGS__);            \
-    }                                                                        \
+#define ESP_ERROR_COMPLAIN(x, format, ...)                                  \
+  do {                                                                      \
+    esp_err_t err_rc_ = (x);                                                \
+    if (unlikely(err_rc_ != ESP_OK)) {                                      \
+      ESP_LOGE(TAG, "%s(%d) error 0x%04X: %s - " format, __FUNCTION__,      \
+               __LINE__, err_rc_, esp_err_to_name(err_rc_), ##__VA_ARGS__); \
+    }                                                                       \
   } while (0)
 
 #define ESP_RETURN_FALSE_ON_ERROR(x, format, ...)                            \

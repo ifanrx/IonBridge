@@ -20,6 +20,13 @@ config MQTT_APP_URI
     help
         The URI of the MQTT broker to connect to.
 
+config MQTT_APP_FALLBACK_URI
+    string "MQTT Broker fallback URI"
+    depends on ENABLE_MQTT
+    default "mqtt://localhost:1883"
+    help
+        The fallback URI of the MQTT broker to connect to.
+
 config MQTT_APP_HOSTNAME
     string "MQTT Broker HOSTNAME"
     depends on ENABLE_MQTT
@@ -30,7 +37,7 @@ config MQTT_APP_HOSTNAME
 config MQTT_MAX_RECONNECT_ATTEMPTS
     int "MQTT MAX RECONNECT ATTEMPTS"
     depends on ENABLE_MQTT
-    default 6
+    default 10
     help
         Max reconnect attempts(doubled because counter will increase in both disconnect and error event)
 

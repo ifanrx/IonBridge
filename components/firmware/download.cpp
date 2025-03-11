@@ -12,6 +12,8 @@
 #include "esp_err.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
+#include "esp_log_buffer.h"
+#include "esp_log_level.h"
 #include "firmware.h"
 #include "sdkconfig.h"
 #include "storage.h"
@@ -22,12 +24,25 @@
 #define DOWNLOAD_TASK_STACK_SIZE CONFIG_FIRMWARE_DOWNLOAD_TASK_STACK_SIZE
 #define DOWNLOAD_TASK_PRIORITY CONFIG_FIRMWARE_DOWNLOAD_TASK_PRIORITY
 #define DOWNLOAD_DATA_BUFFER_SIZE CONFIG_FIRMWARE_DOWNLOAD_DATA_BUFFER_SIZE
+#define FIRMWARE_CHECK_CHECKSUM
 
 #define SW3566_FIRMWARE_FILE_PREFIX "SW3566"
 #define FPGA_FIRMWARE_FILE_PREFIX "FPGA"
+#ifdef FIRMWARE_CHECK_CHECKSUM
+#define CHECKSUM_LENGTH 32
+#endif
 
 static const char *TAG = "OTADownload";
 static bool download_completed = false;
+
+#ifdef FIRMWARE_CHECK_CHECKSUM
+typedef struct {
+  size_t offset;
+  char data[CHECKSUM_LENGTH];
+} checksum_config_t;
+esp_err_t get_firmware_checksum(const char *url, const char *cert_pem,
+                                FirmwareType type, checksum_config_t *checksum);
+#endif
 
 typedef struct {
   const char *temp_path;
@@ -261,6 +276,11 @@ esp_err_t download_firmware(const char *url, const char *cert_pem,
   char temp_path[32], temp_filename[16], path[32];
   download_config_t cfg;
   download_completed = false;
+#ifdef FIRMWARE_CHECK_CHECKSUM
+  checksum_config_t checksum_config = {};
+  char got_checksum[CHECKSUM_LENGTH];
+  char checksum_url[256];
+#endif
 
   // Check firmware type
   ESP_GOTO_ON_FALSE(type == FIRMWARE_TYPE_SW3566 || type == FIRMWARE_TYPE_FPGA,
@@ -274,6 +294,28 @@ esp_err_t download_firmware(const char *url, const char *cert_pem,
   ESP_GOTO_ON_ERROR(
       Storage::GetFirmwarePath(file_prefix, new_ver, path, sizeof(path)),
       CLEANUP, TAG, "GetFirmwarePath: %s (%s)", file_prefix, new_ver);
+
+#ifdef FIRMWARE_CHECK_CHECKSUM
+  if (Storage::Exists(path)) {
+    ESP_GOTO_ON_ERROR(get_firmware_checksum_url(type, new_ver, checksum_url,
+                                                sizeof(checksum_url)),
+                      CLEANUP, TAG, "get_firmware_checksum_url");
+    ESP_GOTO_ON_ERROR(
+        get_firmware_checksum(checksum_url, cert_pem, type, &checksum_config),
+        CLEANUP, TAG, "get_firmware_checksum");
+    ESP_GOTO_ON_ERROR(Storage::ComputeMD5(path, got_checksum), CLEANUP, TAG,
+                      "Failed to compute md5: %s", path);
+    ESP_LOG_BUFFER_CHAR_LEVEL(TAG, got_checksum, CHECKSUM_LENGTH,
+                              ESP_LOG_DEBUG);
+    ESP_LOG_BUFFER_CHAR_LEVEL(TAG, checksum_config.data, CHECKSUM_LENGTH,
+                              ESP_LOG_DEBUG);
+    if (memcmp(checksum_config.data, got_checksum, CHECKSUM_LENGTH) == 0) {
+      ESP_LOGI(TAG, "Firmware %s already downloaded", file_prefix);
+      ret = ESP_OK;
+      goto CLEANUP;
+    }
+  }
+#endif
 
   // Remove other version files before downloading
   ESP_GOTO_ON_ERROR(Storage::RemoveOldVersionFile(curr_ver, file_prefix),
@@ -308,8 +350,8 @@ esp_err_t download_firmware(const char *url, const char *cert_pem,
   ESP_GOTO_ON_ERROR(esp_http_client_perform(client), CLEANUP, TAG,
                     "esp_http_client_perform");  // blocking until finished
   status_code = esp_http_client_get_status_code(client);
-  ESP_GOTO_ON_FALSE(status_code, ESP_ERR_INVALID_RESPONSE, CLEANUP, TAG,
-                    "HTTP status code %d", status_code);
+  ESP_GOTO_ON_FALSE(status_code == HttpStatus_Ok, ESP_ERR_INVALID_RESPONSE,
+                    CLEANUP, TAG, "HTTP status code %d", status_code);
 
   ret = ESP_ERR_NOT_FINISHED;
   if (download_completed) {
@@ -330,3 +372,42 @@ CLEANUP:
   }
   return ret;
 }
+
+#ifdef FIRMWARE_CHECK_CHECKSUM
+esp_err_t checksum_http_event_handler(esp_http_client_event_t *evt) {
+  checksum_config_t *checksum = (checksum_config_t *)evt->user_data;
+  switch (evt->event_id) {
+    case HTTP_EVENT_ON_DATA: {
+      if (evt->data_len + checksum->offset > CHECKSUM_LENGTH) {
+        ESP_LOGE(TAG, "Checksum length is too long: %d",
+                 evt->data_len + checksum->offset);
+        return ESP_FAIL;
+      }
+      memcpy(checksum->data + checksum->offset, evt->data, evt->data_len);
+      checksum->offset += evt->data_len;
+      break;
+    }
+    case HTTP_EVENT_ON_FINISH: {
+      ESP_LOGD(TAG, "HTTP_EVENT_ON_FINISH");
+      break;
+    }
+    case HTTP_EVENT_DISCONNECTED:
+      ESP_LOGI(TAG, "HTTP_EVENT_DISCONNECTED");
+      break;
+    case HTTP_EVENT_ON_HEADER:
+      ESP_LOGD(TAG, "HTTP event on header: key=%s, value=%s", evt->header_key,
+               evt->header_value);
+      break;
+    default:
+      break;
+  }
+  return ESP_OK;
+}
+
+esp_err_t get_firmware_checksum(const char *url, const char *cert_pem,
+                                FirmwareType type,
+                                checksum_config_t *checksum) {
+  esp_err_t ret = ESP_OK;
+  return ret;
+}
+#endif

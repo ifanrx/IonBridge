@@ -36,6 +36,7 @@ enum ServiceCommand {
   GET_DEVICE_MODEL = 0x1c,     // 获取设备型号
   PUSH_LICENSE = 0x1d,         // 推送 license
   GET_BLE_RSSI = 0x1e,         // 获取 BLE RSSI
+  GET_BLE_MTU = 0x1f,          // 获取 BLE MTU
 
   // OTA
   PERFORM_BLE_OTA = 0x20,        // 执行BLE OTA
@@ -54,6 +55,8 @@ enum ServiceCommand {
   SET_WIFI_SSID_AND_PASSWORD = 0x36,  // 设置WIFI SSID和密码
   GET_WIFI_RECORDS = 0x37,            // 获取WIFI记录
   OPERATE_WIFI_RECORD = 0x38,         // 操作WIFI记录
+  GET_WIFI_STATE_MACHINE = 0x39,      // 获取 WIFI 状态
+  SET_WIFI_STATE_MACHINE = 0x3a,      // 设置 WIFI 状态
 
   // Power
   TOGGLE_PORT_POWER = 0x40,        // 切换端口
@@ -72,12 +75,6 @@ enum ServiceCommand {
   GET_START_CHARGE_TIMESTAMP = 0x4b,       // 获取开始充电的时间戳
   TURN_ON_PORT = 0x4c,                     // 打开端口
   TURN_OFF_PORT = 0x4d,                    // 关闭端口
-  SET_OVERCLOCK_FEATURE = 0x4f,            // 开关端口超频
-  GET_OVERCLOCK_FEATURE = 0x50,            // 查询端口超频状态
-  SET_TFCP_FEATURE = 0x51,                 // 启用/禁用 TFCP
-  GET_TFCP_FEATURE = 0x52,                 // 查询 TFCP 状态
-  SET_UFCS_FEATURE = 0x53,                 // 启用/禁用 UFCS
-  GET_UFCS_FEATURE = 0x54,                 // 查询 UFCS 状态
   SET_STATIC_ALLOCATOR = 0x55,             // 设置老式充充电策略
   GET_STATIC_ALLOCATOR = 0x56,             // 获取老式充充电策略
   SET_PORT_CONFIG = 0x57,                  // 设置端口配置
@@ -86,6 +83,8 @@ enum ServiceCommand {
   GET_PORT_COMPATIBILITY_SETTINGS = 0x5a,  // 获取端口兼容性设置
   SET_TEMPERATURE_MODE = 0x5b,             // 设置温度模式
   SET_TEMPORARY_ALLOCATOR = 0x5c,          // 设置临时充电策略
+  SET_PORT_CONFIG1 = 0x5d,                 // 设置端口配置
+  GET_PORT_CONFIG1 = 0x5e,                 // 获取端口配置
 
   // Display
   SET_DISPLAY_INTENSITY = 0x70,

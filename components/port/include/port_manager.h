@@ -206,6 +206,8 @@ class PortManager {
   uint8_t GetAttachedPortCount() const {
     return __builtin_popcount(attaced_ports_);
   }
+  uint8_t GetAttachedAndAdjustablePortCount() const;
+
   uint32_t GetChargingDurationSeconds() const;
   std::array<uint8_t, NUM_PORTS> GetPortsMinPower() const;
   std::array<uint8_t, NUM_PORTS> GetPortsMaxPower() const;
@@ -321,7 +323,7 @@ class PortManager {
   size_t Size() const { return ports_.size(); }
   bool Empty() const { return ports_.empty(); }
 
-  void UpdateAlivedPortsStage() {
+  void UpdateAlivePortsStage() {
     for (Port& port : this->GetAlivePorts()) {
       port.Update();
     }
@@ -346,7 +348,6 @@ class PortManager {
 
   uint32_t charging_at_ = -1;
   uint8_t attaced_ports_ = 0;
-  uint16_t pd_rx_soft_reset_count_ = 0;
   uint16_t pd_rx_hard_reset_count_ = 0;
   uint16_t pd_rx_error_count_ = 0;
   uint16_t pd_rx_cable_reset_count_ = 0;
@@ -364,6 +365,7 @@ class PortManager {
   void HandleInvalidCommandError(Port& port, const uart_message_t& uart_msg);
   void HandleUncorrectableError(Port& port, const uart_message_t& uart_msg);
   void HandleChargingAlert(Port& port, const uart_message_t& uart_msg);
+  void HandleKeepAliveMessage(Port& port, const uart_message_t& uart_msg);
 #endif
 };
 

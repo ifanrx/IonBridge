@@ -67,6 +67,7 @@ esp_err_t rpc::display::set_display_mode(uint8_t mode) {
     case DisplayMode::OFF:
     case DisplayMode::MANUAL:
     case DisplayMode::POWER_METER:
+      ESP_LOGD(TAG, "Setting display mode to %d", mode);
       return write_fpga_reg(FPGARegAddr::DISPLAY_MODE, mode);
     default:
       ESP_LOGE(TAG, "Invalid display mode %d", mode);

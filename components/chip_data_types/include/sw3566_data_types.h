@@ -196,7 +196,7 @@ typedef struct __attribute__((packed)) {
 } InvalidCommandError;
 
 typedef struct __attribute__((packed)) {
-  bool pd_rx_soft_reset : 1;
+  bool rapid_reconnect : 1;
   bool pd_rx_hard_reset : 1;
   bool pd_rx_error : 1;
   bool pd_rx_cable_reset : 1;

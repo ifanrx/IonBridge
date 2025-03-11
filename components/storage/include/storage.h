@@ -29,6 +29,8 @@ esp_err_t GetFPGAFirmware(uint8_t *part, size_t partSize, int offset);
 size_t GetFPGAFirmwareSize();
 esp_err_t GetFPGAFirmwarePath(const char *version, char *path, size_t pathSize);
 esp_err_t RemoveOldVersionFile(const char *currentVersion, const char *prefix);
+esp_err_t ComputeMD5(const char *path, char *hexdigest);
+bool Exists(const char *path);
 };  // namespace Storage
 
 #endif
