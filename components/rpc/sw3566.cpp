@@ -5,7 +5,8 @@
 #include <cstdint>
 #include <cstdio>
 
-#include "animation.h"
+#include "display_animation.h"
+#include "display_manager.h"
 #include "esp_check.h"
 #include "esp_err.h"
 #include "esp_log.h"
@@ -13,6 +14,7 @@
 #include "esp_timer.h"
 #include "ionbridge.h"
 #include "rpc.h"
+#include "sdkconfig.h"
 #include "storage.h"
 #include "sw3566_data_types.h"
 #include "uart.h"
@@ -43,10 +45,28 @@ esp_err_t rpc::mcu::send_command(uint8_t mcu, uint16_t command,
     ESP_LOGE(TAG, "SW3566 %d: Invalid request size: %d", mcu, request_size);
     return ESP_ERR_INVALID_ARG;
   }
-  ESP_LOGI(TAG, "Sending command 0x%04X to SW3566 %d, request size: %d",
+
+  ESP_LOGD(TAG, "Sending command 0x%04X to SW3566 %d, request size: %d",
            command, mcu, request_size);
-  SEND_UART_MSG(mcu, command, request, request_size, response, response_size,
-                "send_command 0x%04X", command);
+  SW3566Command cmd = static_cast<SW3566Command>(command);
+  int wait_delay_ms;
+  bool wait_for_response;
+  switch (cmd) {
+    default:
+      wait_delay_ms = 0;
+      wait_for_response = true;
+  }
+  ESP_RETURN_ON_ERROR(uart_send(mcu, cmd, request, request_size, wait_delay_ms,
+                                wait_for_response),
+                      TAG, "uart_send to mcu %d failed: send_command 0x%04X",
+                      mcu, command);
+  if (!wait_for_response) {
+    return ESP_OK;
+  }
+
+  ESP_RETURN_ON_ERROR(uart_read(mcu, cmd, response, response_size), TAG,
+                      "uart_read from mcu %d failed: send_command 0x%04X", mcu,
+                      command);
   return ESP_OK;
 }
 
@@ -94,6 +114,7 @@ esp_err_t rpc::mcu::bringup(uint8_t mcu, bool skip_upgrade) {
   ESP_LOGI(TAG, "Bringing up SW3566[%d]", mcu);
   KeepAliveStatus keep_alive_status;
   esp_err_t __attribute__((unused)) err;
+  bool upgraded = false;
   SW3566BootStage stage = SW3566BootStage::AT_BOOTLOADER;
 
   while (true) {
@@ -131,6 +152,8 @@ esp_err_t rpc::mcu::bringup(uint8_t mcu, bool skip_upgrade) {
 
       case SW3566BootStage::OPERATIONAL:
         ESP_LOGI(TAG, "SW3566[%d] OPERATIONAL", mcu);
+        DisplayManager::GetInstance().SetAnimation(
+            AnimationType::IDLE_ANIMATION, true);
         return ESP_OK;
 
       default:
@@ -158,7 +181,7 @@ esp_err_t rpc::mcu::boot_all(bool *booted, uint8_t count, bool skip_upgrade) {
   return ESP_OK;
 }
 
-esp_err_t rpc::mcu::set_subscription(uint8_t mcu, Subscriptions subs) {
+esp_err_t rpc::mcu::set_subscription(uint8_t mcu, Subscriptions &subs) {
   SetSubscriptionsRequest req{
       .nonce = generate_nonce(),
       .subscriptions = subs,
@@ -231,16 +254,13 @@ uint8_t generate_nonce() {
   return random_uint8;
 }
 
-uint8_t round_to_nearest_multiple(uint8_t val, uint8_t multiple) {
-  uint8_t rounded_val = ((val + multiple - 1) / multiple) * multiple;
-  return rounded_val;
-}
-
 esp_err_t rpc::mcu::set_power_features(uint8_t mcu, PowerFeatures features) {
   SetPowerFeaturesRequest req = {.nonce = generate_nonce(),
                                  .features = features};
   SetPowerFeaturesResponse res;
   uint8_t res_size = sizeof(res);
+  ESP_LOGD(TAG, "Port %d new features:", mcu);
+  ESP_LOG_BUFFER_HEXDUMP(TAG, &features, sizeof(PowerFeatures), ESP_LOG_DEBUG);
 
   SEND_UART_MSG(mcu, SW3566Command::SET_POWER_FEATURES, (const uint8_t *)&req,
                 sizeof(req), (uint8_t *)&res, &res_size, "set_power_features");
@@ -313,5 +333,29 @@ esp_err_t rpc::mcu::get_max_power_budget(uint8_t mcu, uint8_t *budget) {
     *budget = res.max_power_budget;
   }
 
+  return ESP_OK;
+}
+
+/**
+ * @brief Set the system flags for the MCU
+ *
+ * @note The commit field must be 0x55 to commit, otherwise return current value
+ *
+ * @param flags Pointer to the SystemFlags structure
+                filled with the updated flags
+ *
+ * @return
+ *     - ESP_OK Success
+ *     - ESP_ERR_INVALID_ARG flags is NULL
+ *     - ESP_ERR_TIMEOUT
+ */
+esp_err_t rpc::mcu::set_system_flags(uint8_t mcu, SystemFlags *flags) {
+  ESP_RETURN_ON_FALSE(flags != nullptr, ESP_ERR_INVALID_ARG, TAG,
+                      "set_system_flags: flags is NULL");
+  uint8_t res_size = sizeof(SystemFlags);
+
+  SEND_UART_MSG(mcu, SW3566Command::SYSTEM_FLAGS, (const uint8_t *)flags,
+                sizeof(SystemFlags), (uint8_t *)flags, &res_size,
+                "set_system_flags");
   return ESP_OK;
 }

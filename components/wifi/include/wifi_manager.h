@@ -31,9 +31,8 @@ class WiFiManager {
   esp_err_t Add(const std::string& ssid, const std::string& passwd,
                 const uint8_t auth_mode);
   esp_err_t Remove(const std::string& ssid);
-  esp_err_t RemoveAll() { return wifi_storage_.RemoveAll(); }
+  esp_err_t RemoveAll();
   bool GetWiFi(char* ssid, char* passwd);
-  bool AllWiFiTried() const { return use_index_ >= found_count_; }
   esp_err_t GetWiFiByIndex(uint8_t index, std::string* ssid,
                            std::string* passwd, uint8_t* auth_mode) const;
   bool HasSSID(const std::string& ssid);

@@ -7,6 +7,8 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <queue>
+#include <string>
 #include <vector>
 
 #include "app.h"
@@ -15,12 +17,18 @@
 #include "esp_err.h"
 #include "esp_event_base.h"
 #include "esp_log.h"
+#include "esp_log_buffer.h"
+#include "esp_log_level.h"
+#include "esp_system.h"
 #include "esp_timer.h"
+#include "freertos/idf_additions.h"
 #include "ionbridge.h"
 #include "machine_info.h"
 #include "mqtt_client.h"
+#include "mqtt_message.h"
 #include "nvs_default.h"
 #include "nvs_namespace.h"
+#include "portmacro.h"
 #include "sdkconfig.h"
 #include "telemetry_task.h"
 #include "utils.h"
@@ -29,52 +37,66 @@
 
 static const char *TAG = "MQTTApp";
 
-MQTTClient *MQTTClient::m_instance = nullptr;
+typedef std::queue<std::vector<uint8_t>> MQTTMsgQueue;
+static MQTTMsgQueue kMQTTMsgQueue;
 
-#ifdef CONFIG_ENABLE_MQTT
+MQTTClient *MQTTClient::m_instance = nullptr;
+SemaphoreHandle_t MQTTClient::m_instance_mutex = nullptr;
+bool MQTTClient::m_initialized = false;
+
 #define MQTT_APP_URI CONFIG_MQTT_APP_URI
 #define MQTT_MAX_RECONNECT_ATTEMPTS CONFIG_MQTT_MAX_RECONNECT_ATTEMPTS
 #define MQTT_APP_FALLBACK_URI CONFIG_MQTT_APP_FALLBACK_URI
 #define MQTT_APP_HOSTNAME CONFIG_MQTT_APP_HOSTNAME
 #define MQTT_APP_STABLE_CONNECTION_DURATION 10 * 60 * 1e6
 #define MQTT_APP_MONITOR_DURATION 15 * 60 * 1e6
-#endif
-
-#ifdef CONFIG_ENABLE_MQTT
 
 static uint16_t connection_start_time = 0;
+static bool client_need_destroy = false;
 
-// 这个是 MQTT 的事件处理函数，在这里分发事件到 App 来处理
+// Dispatching MQTT events to the MQTT client
 void mqtt_event_handler(void *handler_args, esp_event_base_t base,
                         int32_t event_id, void *event_data) {
   ESP_LOGD(TAG, "Event dispatched from event loop base=%s, event_id=%" PRIi32,
            base, event_id);
-  esp_mqtt_event_handle_t event = (esp_mqtt_event_handle_t)event_data;
 
+  if (client_need_destroy) {
+    // MQTT client is destroying, ignore all events
+    return;
+  }
+
+  if (!MQTTClient::Initialize()) {
+    // MQTT client initialization failed, ignore all events
+    return;
+  }
+
+  MQTTClient *client = MQTTClient::GetInstance();
+  esp_mqtt_event_handle_t event = (esp_mqtt_event_handle_t)event_data;
   switch (event_id) {
     case MQTT_EVENT_CONNECTED: {
       ESP_LOGD(TAG, "MQTT_EVENT_CONNECTED");
-      MQTTClient::GetInstance()->on_mqtt_event_connected(event);
+      client->on_mqtt_event_connected(event);
       break;
     }
     case MQTT_EVENT_DISCONNECTED:
       ESP_LOGD(TAG, "MQTT_EVENT_DISCONNECTED");
-      MQTTClient::GetInstance()->on_mqtt_event_disconnected(event);
+      client->on_mqtt_event_disconnected(event);
       break;
     case MQTT_EVENT_SUBSCRIBED:
       ESP_LOGD(TAG, "MQTT_EVENT_SUBSCRIBED");
+      client->on_mqtt_event_subscribed(event);
       break;
     case MQTT_EVENT_PUBLISHED:
       ESP_LOGD(TAG, "MQTT_EVENT_PUBLISHED");
-      MQTTClient::GetInstance()->on_mqtt_event_published(event);
+      client->on_mqtt_event_published(event);
       break;
     case MQTT_EVENT_DATA:
       ESP_LOGD(TAG, "MQTT_EVENT_DATA");
-      MQTTClient::GetInstance()->on_mqtt_event_data(event);
+      client->on_mqtt_event_data(event);
       break;
     case MQTT_EVENT_ERROR:
       ESP_LOGD(TAG, "MQTT_EVENT_ERROR");
-      MQTTClient::GetInstance()->on_mqtt_event_error(event);
+      client->on_mqtt_event_error(event);
       break;
     case MQTT_EVENT_BEFORE_CONNECT:
       ESP_LOGD(TAG, "MQTT_EVENT_BEFORE_CONNECT");
@@ -90,29 +112,149 @@ void mqtt_event_handler(void *handler_args, esp_event_base_t base,
       break;
   }
 }
-#endif
 
-MQTTClient::MQTTClient() {
-  m_started = false;
+static void RunMQTTMessageTask(void *arg) {
+  MQTTClient *mqtt = static_cast<MQTTClient *>(arg);
+  mqtt->TaskLoop();
+}
+
+bool MQTTClient::Initialize() {
+  if (m_initialized) {
+    return true;
+  }
+
+  m_instance_mutex = xSemaphoreCreateMutex();
+  if (m_instance_mutex == nullptr) {
+    ESP_LOGE(TAG, "Failed to create MQTTClient mutex");
+    return false;
+  }
+
+  m_initialized = true;
+  return true;
+}
+
+// The MQTT Client needs to be used by multiple modules, such as Wi-Fi and App,
+// so it requires a singleton pattern.
+MQTTClient *MQTTClient::GetInstance() {
+  if (!m_initialized) {
+    ESP_LOGE(TAG, "MQTTClient not initialized");
+    return nullptr;
+  }
+
+  xSemaphoreTake(m_instance_mutex, portMAX_DELAY);
+
+  if (m_instance == nullptr) {
+    m_instance = new MQTTClient();
+    if (m_instance == nullptr) {
+      // Memory allocation failed
+      ESP_LOGE(TAG, "Failed to allocate memory for MQTT client");
+      return nullptr;
+    }
+    client_need_destroy = false;
+  }
+
+  xSemaphoreGive(m_instance_mutex);
+  return m_instance;
+}
+
+void MQTTClient::DestroyInstance() {
+  if (!m_initialized) {
+    return;
+  }
+
+  if (xSemaphoreTake(m_instance_mutex, pdMS_TO_TICKS(10)) != pdTRUE) {
+    // destroying at somewhere else, abort current destroying
+    return;
+  }
+
+  if (m_instance != nullptr) {
+    m_instance->Stop();
+    delete m_instance;
+    m_instance = nullptr;
+    client_need_destroy = false;
+  }
+
+  xSemaphoreGive(m_instance_mutex);
+}
+
+esp_err_t MQTTClient::AttemptReconnection() {
+  static uint8_t reconnect_count = 0;
+
+  // 1. Ensure MQTT client is initialized
+  if (!m_initialized && !Initialize()) {
+    ESP_LOGE(TAG, "MQTT client initialization failed");
+    return ESP_ERR_INVALID_STATE;
+  }
+
+  // 2. Get current instance
+  MQTTClient *mqtt = GetInstance();
+  if (!mqtt) {
+    return ESP_ERR_INVALID_STATE;
+  }
+
+  // 3. If client doesn't need to be destroyed, everything is fine
+  if (!client_need_destroy) {
+    return ESP_OK;
+  }
+
+  // 4. Handle reconnection when client needs to be destroyed
+  bool was_stable =
+      mqtt->GetConnectionDuration() > MQTT_APP_STABLE_CONNECTION_DURATION;
+  DestroyInstance();
+
+  if (was_stable) {
+    reconnect_count = 0;
+  } else {
+    reconnect_count++;
+    ESP_LOGI(TAG, "MQTT reconnect attempt %d of %d", reconnect_count,
+             MQTT_MAX_RECONNECT_ATTEMPTS);
+  }
+
+  if (reconnect_count >= MQTT_MAX_RECONNECT_ATTEMPTS) {
+    ESP_LOGE(TAG, "Maximum MQTT reconnection attempts reached");
+    reconnect_count = 0;
+    return ESP_FAIL;
+  }
+
+  // 5. Create a new instance and start it
+  MQTTClient *new_mqtt = GetInstance();
+  if (!new_mqtt) {
+    return ESP_ERR_INVALID_STATE;
+  }
+  if (!new_mqtt->Start()) {
+    ESP_LOGE(TAG, "Failed to restart MQTT client");
+    mqtt->MarkForDestroy();
+    return ESP_ERR_NOT_FINISHED;
+  }
+  return ESP_OK;
+}
+
+void MQTTClient::MarkForDestroy() { client_need_destroy = true; }
+
+MQTTClient::MQTTClient() : m_started(false), m_custom_broker(false) {
   m_config = {};
   esp_err_t ret;
-#ifdef CONFIG_ENABLE_MQTT
+
+  init_topics();
+
   size_t length = sizeof(m_uri);
   ret = UserMQTTNVSGet(m_uri, &length, NVSKey::MQTT_CUSTOM_BROKER);
   if (ret == ESP_OK && strlen(m_uri) > 0) {
     // use custom broker
-    m_config.broker.address.uri = m_uri;
     m_custom_broker = true;
-  } else {
-    ret = MQTTNVSGet(m_uri, &length, NVSKey::MQTT_BROKER);
-    if (ret != ESP_OK) {
-      ESP_LOGW(TAG, "Failed to get MQTT broker address: %s (%d)",
-               esp_err_to_name(ret), ret);
-      m_config.broker.address.uri = MQTT_APP_URI;
-    } else {
-      m_config.broker.address.uri = m_uri;
+  } else if (MQTTNVSGet(m_uri, &length, NVSKey::MQTT_BROKER) != ESP_OK) {
+    // use default broker
+    ESP_LOGW(TAG, "Failed to get MQTT broker address: %s (%d)",
+             esp_err_to_name(ret), ret);
+    // Safer copy with size check
+    int written = snprintf(m_uri, sizeof(m_uri), "%s", MQTT_APP_URI);
+    if (written >= sizeof(m_uri)) {
+      ESP_LOGE(TAG, "MQTT URI truncated (needed %d bytes, have %d)",
+               written + 1, (int)sizeof(m_uri));
     }
   }
+  m_config.broker.address.uri = m_uri;
+
   /* MQTT keepalive, default is 120 seconds
    * When configuring this value, keep in mind that the client attempts to
    * communicate with the broker at half the interval that is actually set.
@@ -121,6 +263,7 @@ MQTTClient::MQTTClient() {
    */
   m_config.session.keepalive = 40;
   m_config.session.disable_clean_session = false;
+
 #ifdef CONFIG_MQTT_PROTOCOL_V_3_1
   m_config.session.protocol_ver = MQTT_PROTOCOL_V_3_1;
 #elif defined(CONFIG_MQTT_PROTOCOL_V_3_1_1)
@@ -128,15 +271,15 @@ MQTTClient::MQTTClient() {
 #elif defined(CONFIG_MQTT_PROTOCOL_V_5)
   m_config.session.protocol_ver = MQTT_PROTOCOL_V_5;
 #endif
-#endif
 
   // handle reconnect manually
   m_config.network.disable_auto_reconnect = true;
 
-#ifdef CONFIG_ENABLE_MQTT_TLS
   if (m_custom_broker) {
     return;
   }
+
+#ifdef CONFIG_ENABLE_MQTT_TLS
   // Load CA
   length = sizeof(m_ca_crt);
   ESP_GOTO_ON_ERROR(MQTTNVSGet(m_ca_crt, &length, NVSKey::MQTT_CA_CERT), ERROR,
@@ -163,58 +306,92 @@ ERROR:
 #endif
 }
 
-// The MQTT Client needs to be used by multiple modules, such as Wi-Fi and App,
-// so it requires a singleton pattern.
-MQTTClient *MQTTClient::GetInstance() {
-  if (m_instance == nullptr) {
-    m_instance = new MQTTClient();
+MQTTClient::~MQTTClient() {
+  if (m_client != nullptr) {
+    esp_mqtt_client_destroy(m_client);
+    m_client = nullptr;
   }
-  return m_instance;
+  if (m_task != nullptr) {
+    // exit task safely
+    xTaskNotify(m_task, static_cast<uint32_t>(MQTTMsgTaskEvent::EXIT),
+                eSetValueWithOverwrite);
+    // Wait briefly to allow task to start cleanup
+    DELAY_MS(10);
+    m_task = nullptr;
+  }
 }
 
-void MQTTClient::ForceStart() {
+bool MQTTClient::ForceStart() {
   stop_permanently = false;
-#ifdef CONFIG_ENABLE_MQTT
   if (m_started) {
-    return;
+    return true;
   }
 
   ESP_LOGI(TAG, "Starting MQTT client, Broker: %s",
            m_config.broker.address.uri);
+
+  // resolve address
+  if (std::strcmp(m_config.broker.address.uri, MQTT_APP_FALLBACK_URI) != 0 &&
+      !wifi_controller.ResolveAddress(MQTT_APP_HOSTNAME)) {
+    ESP_LOGE(TAG, "Failed to resolve MQTT broker: %s",
+             m_config.broker.address.uri);
+    SetFallbackConfig();
+  }
+
+  // start MQTT message task
+  if (xTaskCreate(RunMQTTMessageTask, "mqtt_msg", 1024 * 3, (void *)this, 5,
+                  &m_task) != pdPASS) {
+    ESP_LOGE(TAG, "Failed to create MQTT task");
+    return false;
+  }
+
   m_client = esp_mqtt_client_init(&m_config);
+  if (!m_client) {
+    ESP_LOGE(TAG, "Failed to initialize MQTT client");
+    return false;
+  }
 
   /* The last argument may be used to pass data to the event handler, in
    * this example mqtt_event_handler */
   esp_err_t err = esp_mqtt_client_register_event(
       m_client, (esp_mqtt_event_id_t)ESP_EVENT_ANY_ID, mqtt_event_handler,
       NULL);
-  ESP_ERROR_COMPLAIN(err, "esp_mqtt_client_register_event");
-  err = esp_mqtt_client_start(m_client);
-  ESP_ERROR_COMPLAIN(err, "esp_mqtt_client_start");
-  m_started = err == ESP_OK;
-  init_topics();
-#else
-  ESP_LOGI(TAG, "MQTT is disabled");
-#endif
-}
-
-void MQTTClient::Start() {
-  if (!stop_permanently) {
-    ForceStart();
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "Failed to register MQTT event handler: %s",
+             esp_err_to_name(err));
+    esp_mqtt_client_destroy(m_client);
+    m_client = nullptr;
+    return false;
   }
+
+  err = esp_mqtt_client_start(m_client);
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "Failed to start MQTT client: %s", esp_err_to_name(err));
+    esp_mqtt_client_destroy(m_client);
+    m_client = nullptr;
+    return false;
+  }
+
+  m_started = true;
+  return m_started;
 }
 
-// Called after Wi-Fi disconnection to execute the Stop Wi-Fi module
-// implementation.
+bool MQTTClient::Start() {
+  if (!stop_permanently) {
+    return ForceStart();
+  }
+  return false;
+}
+
 void MQTTClient::Stop(bool permanently) {
-  __attribute__((unused)) esp_err_t ret = ESP_OK;
+  esp_err_t ret __attribute__((unused)) = ESP_OK;
   stop_permanently = permanently;
   if (permanently) {
     ESP_LOGI(TAG, "Stopping MQTT client permanently");
+    stop_permanently = true;
   }
 
-#ifdef CONFIG_ENABLE_MQTT
-  if (!m_started) {
+  if (!(m_started || m_client != nullptr)) {
     return;
   }
 
@@ -230,21 +407,29 @@ void MQTTClient::Stop(bool permanently) {
            static_cast<int>(largest_free_block));
 #endif
 
-  ESP_LOGI(TAG, "Stopping MQTT client");
   m_started = false;
   m_connected = false;
   WAIT_FOR_CONDITION(m_publishing == 0, 10);
-  ESP_ERROR_COMPLAIN(esp_mqtt_client_stop(m_client),
-                     "Failed to stop MQTT client");
-  ESP_LOGI(TAG, "Stoppped MQTT client");
-  ESP_ERROR_COMPLAIN(
+
+  ESP_RETURN_VOID_ON_ERROR(
+      esp_mqtt_client_disconnect(m_client), TAG,
+      "Couldn't disconnect MQTT client, maybe wrong initialization");
+
+  ESP_LOGI(TAG, "Stopping MQTT client");
+  ESP_RETURN_VOID_ON_ERROR(esp_mqtt_client_stop(m_client), TAG,
+                           "Failed to stop MQTT client");  // 5 secs for stop
+  ESP_LOGI(TAG, "Stopped MQTT client");
+  ESP_RETURN_VOID_ON_ERROR(
       esp_mqtt_client_unregister_event(
           m_client, static_cast<esp_mqtt_event_id_t>(ESP_EVENT_ANY_ID),
           mqtt_event_handler),
-      "Failed to unregister MQTT event handler");
-  ESP_ERROR_COMPLAIN(esp_mqtt_client_destroy(m_client),
-                     "Failed to destroy MQTT client");
+      TAG, "Failed to unregister MQTT event handler");
+  ESP_LOGI(TAG, "Destroying MQTT client");
+  ESP_RETURN_VOID_ON_ERROR(
+      esp_mqtt_client_destroy(m_client), TAG,
+      "Failed to destroy MQTT client, maybe wrong initialization");
   ESP_LOGI(TAG, "Destroyed MQTT client");
+  m_client = nullptr;
 
 #ifdef CONFIG_MQTT_MEMORY_DEBUG
   // Debugging memory usage after stopping the MQTT client
@@ -256,25 +441,24 @@ void MQTTClient::Stop(bool permanently) {
            memory_caps, static_cast<int>(free_memory_size),
            static_cast<int>(largest_free_block));
 #endif
-
-#else
-  ESP_LOGI(TAG, "MQTT functionality is disabled");
-#endif
 }
 
 void MQTTClient::SetFallbackConfig() {
-#ifdef CONFIG_ENABLE_MQTT
   if (m_custom_broker) {
     return;
   }
   m_config.broker.address.uri = MQTT_APP_FALLBACK_URI;
   m_config.broker.verification.common_name = MQTT_APP_HOSTNAME;
-#endif
+
+  if (!std::string(MQTT_APP_FALLBACK_URI).starts_with("mqtts://")) {
+    m_config.broker.verification.certificate = nullptr;
+    m_config.credentials.authentication.certificate = nullptr;
+    m_config.credentials.authentication.key = nullptr;
+  }
 }
 
 esp_err_t MQTTClient::PublishBytes(const char *topic,
                                    const std::vector<uint8_t> &data, int qos) {
-#ifdef CONFIG_ENABLE_MQTT
   if (data.empty()) {
     ESP_LOGW(TAG, "Attempted to publish empty data");
     return ESP_FAIL;
@@ -285,7 +469,7 @@ esp_err_t MQTTClient::PublishBytes(const char *topic,
     return ESP_OK;
   }
 
-  m_publishing++;
+  m_publishing = m_publishing + 1;
   ESP_LOG_BUFFER_HEX_LEVEL(TAG, data.data(), data.size(), ESP_LOG_DEBUG);
 
   int message_id = esp_mqtt_client_publish(
@@ -293,7 +477,7 @@ esp_err_t MQTTClient::PublishBytes(const char *topic,
       qos, 0);
   if (message_id < 0) {
     ESP_LOGE(TAG, "Failed to publish message");
-    m_publishing--;
+    m_publishing = m_publishing - 1;
     return ESP_FAIL;
   }
 
@@ -301,9 +485,8 @@ esp_err_t MQTTClient::PublishBytes(const char *topic,
            topic, message_id);
 
   if (qos == 0) {
-    m_publishing--;
+    m_publishing = m_publishing - 1;
   }
-#endif
 
   return ESP_OK;
 }
@@ -313,13 +496,25 @@ esp_err_t MQTTClient::Publish(const std::vector<uint8_t> &data, int qos) {
   return PublishBytes(m_telemetry_topic, data, qos);
 }
 
+esp_err_t MQTTClient::Subscribe() {
+  if (!Connected()) {
+    ESP_LOGE(TAG, "Failed to subscribe, MQTT client is not connected");
+    return ESP_ERR_INVALID_STATE;
+  }
+  int ret = esp_mqtt_client_subscribe(m_client, m_command_topic, 2);
+  if (ret < 0) {
+    ESP_LOGE(TAG, "Failed to subscribe to topic: %s, ret: %d", m_command_topic,
+             ret);
+    return ESP_FAIL;
+  }
+  ESP_LOGI(TAG, "Subscribing topic: %s", m_command_topic);
+  return ESP_OK;
+}
+
 void MQTTClient::on_mqtt_event_connected(esp_mqtt_event_handle_t event) {
-  static bool is_first_attempt = true;
-
   esp_mqtt_client_subscribe(m_client, m_command_topic, 2);
-  ESP_LOGI(TAG, "MQTT connected and subscribed to topic: %s", m_command_topic);
+  ESP_LOGI(TAG, "MQTT connected and subscribing topic: %s", m_command_topic);
 
-  wifi_controller.Notify(WiFiEventType::MQTT_CONNECTED);
   m_connected = true;
   m_low_memory = false;
   m_connected_at = esp_timer_get_time();
@@ -328,15 +523,6 @@ void MQTTClient::on_mqtt_event_connected(esp_mqtt_event_handle_t event) {
   connection_time_ += (esp_timer_get_time() / 1e6) - connection_start_time;
   connection_start_time = 0;
 
-  TelemetryTask *task = TelemetryTask::GetInstance();
-  if (task != nullptr && !m_custom_broker) {
-    if (is_first_attempt) {
-      is_first_attempt = false;
-      task->ReportMqttConnectionTime();
-    }
-    ble_adv_delay_start();
-    task->RequestShutdownBle();
-  }
   if (m_custom_broker) {
     DELAY_MS(100);
     ESP_LOGI(TAG, "MQTT connected to custom broker, starting web server");
@@ -346,13 +532,11 @@ void MQTTClient::on_mqtt_event_connected(esp_mqtt_event_handle_t event) {
 
 void MQTTClient::on_mqtt_event_disconnected(esp_mqtt_event_handle_t event) {
   m_connected = false;
-  ble_adv_delay_start_limited_duration();
   m_connected_at = 0;
-  wifi_controller.Notify(WiFiEventType::MQTT_DISCONNECTED);
 
   if (!m_low_memory) {
     ESP_LOGI(TAG, "MQTT disconnected, destroying client");
-    m_need_destroy = true;
+    MarkForDestroy();
     return;
   }
 
@@ -364,7 +548,7 @@ void MQTTClient::on_mqtt_event_disconnected(esp_mqtt_event_handle_t event) {
 
 void MQTTClient::on_mqtt_event_published(esp_mqtt_event_handle_t event) {
   if (m_publishing != 0) {
-    m_publishing--;
+    m_publishing = m_publishing - 1;
   }
   ESP_LOGD(TAG, "MQTT message published, msg_id: %d, publishing: %d",
            event->msg_id, m_publishing);
@@ -372,7 +556,21 @@ void MQTTClient::on_mqtt_event_published(esp_mqtt_event_handle_t event) {
 
 void MQTTClient::on_mqtt_event_data(esp_mqtt_event_handle_t event) {
   message_rx_count_++;
-  App::GetInstance().ProcessMQTTMessage(event->data, event->data_len);
+
+  if (event->data_len == 0) {
+    ESP_LOGW(TAG, "MQTT message data length is zero");
+    return;
+  }
+  ESP_LOG_BUFFER_HEX_LEVEL(TAG, event->data, event->data_len, ESP_LOG_DEBUG);
+  if (m_task == nullptr) {
+    ESP_LOGE(TAG, "MQTT task is not initialized");
+    return;
+  }
+
+  kMQTTMsgQueue.push(
+      std::vector<uint8_t>(event->data, event->data + event->data_len));
+  xTaskNotify(m_task, static_cast<uint32_t>(MQTTMsgTaskEvent::RECEIVED),
+              eSetValueWithOverwrite);
 }
 
 void MQTTClient::on_mqtt_event_error(esp_mqtt_event_handle_t event) {
@@ -426,10 +624,86 @@ void MQTTClient::on_mqtt_event_error(esp_mqtt_event_handle_t event) {
            error_code->esp_transport_sock_errno);
 }
 
+void MQTTClient::on_mqtt_event_subscribed(esp_mqtt_event_handle_t event) {
+  static bool at_first_subscribed = true;
+  if (event->error_handle->error_type == MQTT_ERROR_TYPE_SUBSCRIBE_FAILED) {
+    ESP_LOGE(TAG, "Failed to subscribe to topic: %s", m_command_topic);
+    esp_mqtt_client_subscribe(m_client, m_command_topic, 2);
+    return;
+  }
+  ESP_LOGI(TAG, "Subscribed to topic: %s", m_command_topic);
+  TelemetryTask &task = TelemetryTask::GetInstance();
+  if (at_first_subscribed) {
+    at_first_subscribed = false;
+    task.ReportMqttConnectionTime();
+  }
+  ble_adv_delay_start();
+  task.RequestShutdownBle();
+}
+
 void MQTTClient::init_topics() {
   const std::string &psn = MachineInfo::GetInstance().GetPSN();
   snprintf(m_telemetry_topic, sizeof(m_telemetry_topic), "device/%s/telemetry",
            psn.c_str());
   snprintf(m_command_topic, sizeof(m_command_topic), "device/%s/command",
            psn.c_str());
+}
+
+void MQTTClient::TaskLoop() {
+  ESP_LOGI(TAG, "MQTT message task started");
+  std::vector<uint8_t> request, data, response;
+  App &app = App::GetInstance();
+  uint8_t service;
+  uint16_t message_id;
+  MQTTMsgTaskEvent event;
+  while (true) {
+    if (xTaskNotifyWait(pdTRUE, pdTRUE, (uint32_t *)&event, portMAX_DELAY) !=
+        pdTRUE) {  // Wait for event
+      ESP_LOGW(TAG, "Failed to wait for MQTT message task event");
+      continue;
+    }
+    if (event == MQTTMsgTaskEvent::EXIT) {
+      ESP_LOGI(TAG, "MQTT message task exiting");
+      break;
+    }
+    if (event != MQTTMsgTaskEvent::RECEIVED) {
+      ESP_LOGW(TAG, "Invalid MQTT message task event: %d", (int)event);
+      continue;
+    }
+    while (!kMQTTMsgQueue.empty()) {
+      response.clear();
+      request = kMQTTMsgQueue.front();
+      kMQTTMsgQueue.pop();
+
+      if (request.size() < sizeof(uint8_t) + sizeof(uint16_t)) {
+        ESP_LOGW(TAG, "Invalid request data length: %d", (int)request.size());
+        continue;
+      }
+
+      ESP_LOG_BUFFER_HEX_LEVEL(TAG, request.data(), request.size(),
+                               ESP_LOG_DEBUG);
+      service = request[0];
+      message_id = (request[2] << 8) | request[1];
+      data = std::vector<uint8_t>(request.begin() + 3, request.end());
+      ESP_LOGD(TAG, "MQTT Message received, service: 0x%02x", service);
+      app.ExecSrvFromMQTT(service, data, response);
+
+      if (response.empty()) {
+        ESP_LOGW(TAG, "MQTT Message response is empty");
+        continue;
+      }
+
+      MQTTMessageHeader header(service, message_id);
+      std::vector<uint8_t> header_data = header.Serialize();
+      response.insert(response.begin(), header_data.begin(), header_data.end());
+      Publish(response);
+      DELAY_MS(1);
+    }
+  }
+
+  while (!kMQTTMsgQueue.empty()) {
+    kMQTTMsgQueue.pop();
+  }
+  ESP_LOGI(TAG, "MQTT message task exited");
+  vTaskDelete(NULL);
 }

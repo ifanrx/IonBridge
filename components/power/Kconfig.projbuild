@@ -217,6 +217,14 @@ menu "Power Configuration"
         help
             Defines the size of the event queue for the power allocator.
 
+    config POWER_ALLOCATOR_TASK_PRIORITY
+        int "Power Allocator Task Priority"
+        range 1 23
+        default 21
+        help
+            Defines the priority of the power allocator task.
+            Higher values indicate higher priority.
+
     config DEVICE_DEAD_TEMP_THRESHOLD
         int "Device Dead Temperature Threshold"
         default 100

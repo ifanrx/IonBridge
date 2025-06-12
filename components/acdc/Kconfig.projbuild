@@ -1,0 +1,95 @@
+menu "ACDC Configuration"
+
+    orsource "$IDF_PATH/examples/common_components/env_caps/$IDF_TARGET/Kconfig.env_caps"
+
+    config ACDC_MODULE
+        bool "Enable ACDC Module"
+        default n
+        help
+            Enable the ACDC module for power management.
+            This module is responsible for managing the power supply.
+
+    config ACDC_FEEDBACK_SIGNAL_H
+        int "ACDC Feedback Signal High"
+        depends on ACDC_MODULE
+        range 0 1
+        default 1
+        help
+            ACDC feedback signal high level.
+            This setting determines the high level of the feedback signal.
+            0: Low, 1: High.
+
+    config ACDC_FEEDBACK_SIGNAL_L
+        int "ACDC Feedback Signal Low"
+        depends on ACDC_MODULE
+        range 0 1
+        default 0
+        help
+            ACDC feedback signal low level.
+            This setting determines the low level of the feedback signal.
+            0: Low, 1: High.
+
+    config ACDC_FEEDBACK_PIN0
+        int "ACDC Feedback Pin 0"
+        depends on ACDC_MODULE
+        range ENV_GPIO_RANGE_MIN ENV_GPIO_OUT_RANGE_MAX
+        default 6
+        help
+            GPIO pin number for ACDC feedback signal 0.
+            This pin is used to monitor the feedback from the ACDC module.
+
+    config ACDC_FEEDBACK_PIN1
+        int "ACDC Feedback Pin 1"
+        depends on ACDC_MODULE && ACDC_OUTPUT_VOLTAGE_LEVELS > 2
+        range ENV_GPIO_RANGE_MIN ENV_GPIO_OUT_RANGE_MAX
+        default 7
+        help
+            GPIO pin number for ACDC feedback signal 1.
+            This pin is used to monitor the feedback from the ACDC module.
+
+    config ACDC_OUTPUT_VOLTAGE_LEVELS
+        int "ACDC Output Voltage Levels"
+        depends on ACDC_MODULE
+        default 3
+        range 2 4
+        help
+            Number of output voltage levels for the ACDC module.
+            This setting determines how many different voltage levels can be set.
+
+    config ACDC_OUTPUT_VOLTAGE_LEVEL0
+        int "ACDC Output Voltage Level 0, V"
+        depends on ACDC_MODULE && ACDC_OUTPUT_VOLTAGE_LEVELS > 0
+        default 12
+        help
+            Output voltage level 0 for the ACDC module.
+            This value is used to set the first output voltage level.
+            Units: V.
+
+    config ACDC_OUTPUT_VOLTAGE_LEVEL1
+        int "ACDC Output Voltage Level 1, V"
+        depends on ACDC_MODULE && ACDC_OUTPUT_VOLTAGE_LEVELS > 1
+        default 20
+        help
+            Output voltage level 1 for the ACDC module.
+            This value is used to set the second output voltage level.
+            Units: V.
+
+    config ACDC_OUTPUT_VOLTAGE_LEVEL2
+        int "ACDC Output Voltage Level 2, V"
+        depends on ACDC_MODULE && ACDC_OUTPUT_VOLTAGE_LEVELS > 2
+        default 28
+        help
+            Output voltage level 2 for the ACDC module.
+            This value is used to set the third output voltage level.
+            Units: V.
+
+    config ACDC_OUTPUT_DEFAULT_VOLTAGE_LEVEL
+        int "ACDC Default Output Voltage Level"
+        depends on ACDC_MODULE
+        default 1
+        range 0 ACDC_OUTPUT_VOLTAGE_LEVELS
+        help
+            Default output voltage level for the ACDC module.
+            This value is used to set the default output voltage level.
+
+endmenu

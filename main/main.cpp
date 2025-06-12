@@ -8,17 +8,19 @@
 #include <set>
 #include <string>
 
-#include "animation.h"
+#include "FreeRTOSConfig.h"
+#include "acdc.h"
 #include "app.h"
 #include "ble.h"
 #include "controller.h"
+#include "display_animation.h"
+#include "display_manager.h"
 #include "esp_check.h"
 #include "esp_err.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_log_level.h"
 #include "esp_mac.h"
-#include "esp_ota_ops.h"
-#include "esp_pm.h"
 #include "esp_system.h"
 #include "esp_task_wdt.h"
 #include "esp_timer.h"
@@ -27,6 +29,8 @@
 #include "handler.h"
 #include "ionbridge.h"
 #include "machine_info.h"
+#include "mdns.h"
+#include "mqtt_app.h"
 #include "nvs.h"
 #include "nvs_default.h"
 #include "nvs_namespace.h"
@@ -41,30 +45,22 @@
 #include "syslog.h"
 #include "telemetry_task.h"
 #include "utils.h"
-#include "version.h"
 #include "wifi.h"
 
-#if defined(CONFIG_MCU_MODEL_SW3566) || defined(CONFIG_MCU_MODEL_FAKE_SW3566)
+#ifdef CONFIG_PM_ENABLE
+#include "esp_pm.h"
+#endif
+
+#ifdef CONFIG_MCU_MODEL_SW3566
 #include "fpga.h"
+#endif
+
+#if defined(CONFIG_MCU_MODEL_SW3566) || defined(CONFIG_MCU_MODEL_FAKE_SW3566)
 #include "rpc.h"
 #endif
 
-#ifdef CONFIG_ENABLE_RFTEST
-#include "esp_phy_cert_test.h"
-#endif
-
-#include "mqtt_app.h"
-#define MQTT_MAX_RECONNECT_ATTEMPTS CONFIG_MQTT_MAX_RECONNECT_ATTEMPTS
-#define MQTT_APP_STABLE_CONNECTION_DURATION 10 * 60 * 1e6
-#ifdef CONFIG_ENABLE_RESTART_MQTT_CLIENT
-#define ENABLE_RESTART_MQTT_CLIENT
-#endif
-
-#ifdef CONFIG_ENABLE_TEMP_MONITOR
-#define ENABLE_TEMP_MONITOR
-#endif
-
-#ifdef CONFIG_INTERFACE_TYPE_UART
+#if defined(CONFIG_INTERFACE_TYPE_UART) && \
+    !defined(CONFIG_MCU_MODEL_FAKE_SW3566)
 #include "uart.h"
 #endif
 
@@ -102,15 +98,19 @@ extern "C" void app_main(void);
 
 static const char *TAG = "IonBridge";
 
-static PowerAllocator *pAllocator;
-static DeviceController *controller;
-static AnimationController *animationController;
+void feed_watchdog_task(void *arg);
+
+#ifndef CONFIG_ENABLE_FACTORY_MODE
 static MachineInfo &machine_info = MachineInfo::GetInstance();
 
 static bool comm_interface_initialized = false;
+#if !defined(CONFIG_MCU_MODEL_FAKE_SW3566)
 static void comm_interface_init();
+#endif
 static bool chip_ready[NUM_PORTS];
 static bool boot_chips();
+
+static void start_mdns_service();
 
 const int startup_task_max_run = 5;
 const int startup_task_period_ms = 5 * 1000;
@@ -139,27 +139,31 @@ void start_allocator() {
   builder->SetApplyPeriod(1000);   // applying power strategy every 1000ms
   builder->SetPortActiveState(chip_ready, NUM_PORTS);
   builder->SetStrategy<PowerSlowChargingStrategy>();
-  pAllocator = builder->Build();
+  PowerAllocator &allocator = builder->Build();
+  delete builder;
 
-  ESP_RETURN_VOID_ON_ERROR(pAllocator->Start(), TAG,
+  ESP_RETURN_VOID_ON_ERROR(allocator.Start(), TAG,
                            "Failed to start power allocator");
 
   bool enabled = true;
   PowerNVSGetOrDefault(&enabled, NVSKey::POWER_ALLOCATOR_ENABLED);
   if (!enabled) {
     ESP_LOGI(TAG, "Power allocation is disabled");
-    pAllocator->DisablePowerAllocation();
+    allocator.DisablePowerAllocation();
   }
 
-  TelemetryTask::Initialize(*pAllocator, *controller);
-  TelemetryTask *task = TelemetryTask::GetInstance();
-  if (task != nullptr) {
-    task->Start();
-  }
+  DeviceController &controller = DeviceController::GetInstance();
+  TelemetryTask &task = TelemetryTask::GetInstance();
+  task.Start();
 
-  bool normally_booted = comm_interface_initialized &&
-                         pAllocator->GetPortManager().GetActivePortCount() > 0;
-  controller->set_normally_booted(normally_booted);
+#ifndef CONFIG_DEVICE_HUMMING_BOARD
+  PortManager &pm = PortManager::GetInstance();
+  bool normally_booted =
+      comm_interface_initialized && pm.GetActivePortCount() > 0;
+  controller.set_normally_booted(normally_booted);
+#else
+  controller.set_normally_booted(comm_interface_initialized);
+#endif
 }
 
 void set_port_configs() {
@@ -170,10 +174,11 @@ void set_port_configs() {
       NVSKey::POWER_PORT3_CONFIG, NVSKey::POWER_PORT4_CONFIG,
 #endif
   };
+  size_t keys_count = sizeof(keys) / sizeof(keys[0]);
   PortManager &pm = PortManager::GetInstance();
-  for (const Port &port : pm.GetAlivePorts()) {
+  for (Port &port : pm.GetAlivePorts()) {
     size_t i = port.Id();
-    if (i >= sizeof(keys)) {
+    if (i >= keys_count) {
       continue;
     }
 
@@ -182,14 +187,14 @@ void set_port_configs() {
     esp_err_t err =
         PowerNVSGet(reinterpret_cast<uint8_t *>(&config), &size, keys[i]);
     if (err == ESP_OK) {
-      handle_port_config_compatibility(i, config);
-      pm.SetPortConfig(port, config);
-    } else if (err == ESP_ERR_NVS_NOT_FOUND) {
-      pm.SetPortConfig(port,
-                       i == 0 ? default_port_a_config : default_port_config);
-    } else {
-      ESP_ERROR_COMPLAIN(err, "PowerNVSData::GetPortConfig: %d", i);
+      port.SetConfig(config);
+      continue;
     }
+    if (err == ESP_ERR_NVS_NOT_FOUND) {
+      port.ApplyConfig();
+      continue;
+    }
+    ESP_ERROR_COMPLAIN(err, "PowerNVSData::GetPortConfig: %d", i);
   }
 }
 
@@ -244,39 +249,20 @@ bool configure_fpga() {
   }
 #endif
 
-  ESP_RETURN_FALSE_ON_ERROR(rpc::display::set_display_mode(displayMode),
-                            "set_display_mode 0x%x", displayMode);
+  DisplayManager &display_manager = DisplayManager::GetInstance();
+  ESP_RETURN_FALSE_ON_ERROR(display_manager.SetDisplayMode(displayMode),
+                            "SetDisplayMode 0x%x", displayMode);
 
   ESP_RETURN_FALSE_ON_ERROR(
-      rpc::display::set_display_intensity(displayIntensity),
-      "set_display_intensity 0x%x", displayIntensity);
+      display_manager.SetDisplayIntensity(displayIntensity),
+      "SetDisplayIntensity 0x%x", displayIntensity);
   uint8_t displayFlip = 0x00;
   DisplayNVSGetOrDefault(&displayFlip, NVSKey::DISPLAY_FLIP);
-  ESP_RETURN_FALSE_ON_ERROR(rpc::display::set_display_flip_mode(displayFlip),
-                            "set_display_flip_mode 0x%x", displayFlip);
+  ESP_RETURN_FALSE_ON_ERROR(display_manager.SetDisplayFlipMode(displayFlip),
+                            "SetDisplayFlipMode 0x%x", displayFlip);
   return true;
 }
 #endif
-
-void report_firmware_versions() {
-  Version current_mcu_version = Version(machine_info.GetMCUVersion()),
-          current_fpga_version = Version(machine_info.GetFPGAVersion()),
-          current_esp32_version = Version(machine_info.GetESP32Version()),
-          current_zrlib_version = Version(machine_info.GetZRLIBVersion());
-  ESP_LOGI(TAG, "App version: %s", current_esp32_version.toString().c_str());
-#ifdef CONFIG_MCU_MODEL_SW3566
-  ESP_LOGI(TAG, "MCU version: %s, numeric version: %d",
-           current_mcu_version.toString().c_str(),
-           SW3566_FIRMWARE_NUMERIC_VERSION);
-  ESP_LOGI(TAG, "FPGA version: %s, numeric version: %d",
-           current_fpga_version.toString().c_str(),
-           FPGA_FIRMWARE_NUMERIC_VERSION);
-#else
-  ESP_LOGI(TAG, "MCU version: %s", current_mcu_version.toString().c_str());
-  ESP_LOGI(TAG, "FPGA version: %s", current_fpga_version.toString().c_str());
-#endif
-  ESP_LOGI(TAG, "ZRLib version: %s", current_zrlib_version.toString().c_str());
-}
 
 esp_err_t set_mac_address() {
   // Currently we use 6-bytes MAC address
@@ -299,39 +285,22 @@ esp_err_t set_mac_address() {
 
 void heap_caps_alloc_failed_hook(size_t requested_size, uint32_t caps,
                                  const char *function_name) {
-  static bool memory_exceeded = false;
   // Log warning message with allocation details
-  ESP_LOGW(TAG,
-           "Heap alloc failed: caller: %s, requested: %d, caps: %" PRIu32
-           ", free: %" PRIu32,
-           function_name, (int)requested_size, caps, esp_get_free_heap_size());
-  MQTTClient::GetInstance()->SetLowMemoryMark();
+  ESP_LOGW(
+      TAG,
+      "Heap allocation failed - caller: %s, requested: %d bytes, caps: %" PRIu32
+      ", free: %" PRIu32 " bytes",
+      function_name, (int)requested_size, caps, esp_get_free_heap_size());
   // Only available in serial console
   heap_caps_print_heap_info(caps);
-  multi_heap_info_t info;
-  heap_caps_get_info(&info, caps);
-  uint32_t freeHeapSize = info.total_free_bytes;
-  if (freeHeapSize <= CONFIG_MEMORY_ALERT_THRESHOLD_BYTES && !memory_exceeded) {
-    OutOfMemoryAlertInfo data;
-    data.header = {
-        .service = TelemetryServiceCommand::OUT_OF_MEMORY_ALERT,
-        .message_id = TelemetryTask::GetInstance()->GetMessageId(),
-    };
-    data.freeHeapSize = freeHeapSize;
-    data.freeInternalHeapSize = esp_get_free_internal_heap_size();
-    data.minimumFreeHeapSize = info.minimum_free_bytes;
-    data.thresholdFreeHeapSize = CONFIG_MEMORY_ALERT_THRESHOLD_BYTES;
-    ESP_LOGW(TAG,
-             "OOM: threshold: %d, free heap size: %" PRIu32
-             ", free internal heap size: %" PRIu32
-             ", minimum free heap size: %" PRIu32,
-             CONFIG_MEMORY_ALERT_THRESHOLD_BYTES, freeHeapSize,
-             data.freeInternalHeapSize, data.minimumFreeHeapSize);
 
-    ESP_ERROR_COMPLAIN(MQTTClient::GetInstance()->Publish(data.serialize(), 1),
-                       "Publish OutOfMemoryAlertInfo");
+  MQTTClient *mqtt = MQTTClient::GetInstance();
+  if (!mqtt) {
+    // MQTT is unavailable, return
+    return;
   }
-  memory_exceeded = freeHeapSize <= CONFIG_MEMORY_ALERT_THRESHOLD_BYTES;
+  mqtt->SetLowMemoryMark();
+  TelemetryTask::GetInstance().ReportOutOfMemory(caps);
 }
 
 #ifdef CONFIG_ENABLE_RFTEST
@@ -342,12 +311,13 @@ void cert_test() {
   if (err != ESP_OK) {
     return;
   }
-  ESP_LOGW(TAG, "Start cert test");
+  ESP_LOGW(TAG, "Starting certification test");
   esp_phy_wifi_rate_t rate = static_cast<esp_phy_wifi_rate_t>(mode_args[1]);
   int8_t backoff = static_cast<int8_t>(mode_args[2]);
   ESP_LOGI(TAG,
-           "SetTestModeA args: %" PRIu32 " %d %d %" PRIu32 " %" PRIu32
-           " %" PRIu32,
+           "Test mode A parameters - mode: %" PRIu32
+           ", rate: %d, backoff: %d, "
+           "param3: %" PRIu32 ", param4: %" PRIu32 ", param5: %" PRIu32,
            mode_args[0], rate, (int)backoff, mode_args[3], mode_args[4],
            mode_args[5]);
   esp_wifi_power_domain_on();
@@ -363,54 +333,23 @@ void cert_test() {
 }
 #endif
 
-#ifdef ENABLE_RESTART_MQTT_CLIENT
-void restart_mqtt_task(void *arg) {
-  ESP_LOGI(TAG, "Restarting MQTT client");
-  MQTTClient::GetInstance()->Stop();
-  MQTTClient::GetInstance()->Start();
-  vTaskDelete(NULL);
-}
-#endif
-
-void feed_watchdog_task(void *arg) {
-  ESP_ERROR_CHECK(esp_task_wdt_add(nullptr));     // Subscribe this task to TWDT
-  ESP_ERROR_CHECK(esp_task_wdt_status(nullptr));  // Check if it is subscribed
-  ESP_LOGI(TAG, "TWDT is subscribed");
-#ifdef ENABLE_RESTART_MQTT_CLIENT
-  static int64_t restart_mqtt_at = 0;
-  static size_t largest_block_size = 0;
-#endif
-  while (true) {
-    if (esp_get_free_heap_size() < 6 * 1024) {
-      // If the free heap size is less than 6KB, restart the system to free up
-      ESP_LOGW(TAG, "Free heap size is less than 6KB: %" PRIu32 ", restarting",
-               esp_get_free_heap_size());
-      esp_restart();
-    }
-    esp_task_wdt_reset();  // feed watchdog
-#ifdef ENABLE_RESTART_MQTT_CLIENT
-    largest_block_size =
-        heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    if (largest_block_size <= 16 * 1024 &&
-        (esp_timer_get_time() - restart_mqtt_at > 60 * 1e6)) {
-      if (MQTTClient::GetInstance()->Started() &&
-          !MQTTClient::GetInstance()->Connected()) {
-        // If the MQTT client is started but not connected, restart it
-        restart_mqtt_at = esp_timer_get_time();
-        xTaskCreate(restart_mqtt_task, "restart_mqtt", 2 * 1024, NULL, 1, NULL);
-      }
-    }
-#endif
-    DELAY_MS(50);
-  }
-  vTaskDelete(NULL);
-}
-
 static void report_startup_status_task(void *) {
   static int run_count = 0;
   run_count++;
-  if (comm_interface_initialized && pAllocator != nullptr) {
-    uint8_t active_ports = pAllocator->GetPortManager().GetActivePortCount();
+  PowerAllocator &allocator = PowerAllocator::GetInstance();
+  PortManager &pm = PortManager::GetInstance();
+  if (!comm_interface_initialized) {
+#if CONFIG_MCU_MODEL_SW3566
+    ESP_LOGW(TAG, "STARTUP_FAILED_FPGA");
+#elif !defined(CONFIG_MCU_MODEL_FAKE_SW3566)
+    ESP_LOGW(TAG, "STARTUP_FAILED_I2C");
+#endif
+  } else if (!allocator.IsConfigured()) {
+#ifndef CONFIG_MCU_MODEL_FAKE_SW3566
+    ESP_LOGW(TAG, "STARTUP_FAILED_ALLOCATOR");
+#endif
+  } else {
+    uint8_t active_ports = pm.GetActivePortCount();
     if (active_ports == NUM_PORTS) {
       ESP_LOGW(TAG, "STARTUP_SUCCESS");
     } else {
@@ -420,24 +359,16 @@ static void report_startup_status_task(void *) {
           ESP_LOGW(TAG, "SW3566_%d_BOOT_FAILED", i);
         }
       }
-      ESP_LOGW(TAG, "STARTUP_FAILED_SW3566: alive=%d", active_ports);
+      ESP_LOGW(TAG, "STARTUP_FAILED_SW3566: active_ports=%d", active_ports);
 #endif
     }
-  } else if (!comm_interface_initialized) {
-#if CONFIG_MCU_MODEL_SW3566
-    ESP_LOGW(TAG, "STARTUP_FAILED_FPGA");
-#endif
-  } else {
-#ifndef CONFIG_MCU_MODEL_FAKE_SW3566
-    ESP_LOGW(TAG, "STARTUP_FAILED_ALLOCATOR");
-#endif
   }
 
   if (run_count >= startup_task_max_run) {
     ESP_ERROR_COMPLAIN(esp_timer_stop(startup_task_timer),
-                       "esp_timer_stop startup_task_timer");
+                       "Failed to stop startup status timer");
     ESP_ERROR_COMPLAIN(esp_timer_delete(startup_task_timer),
-                       "esp_timer_delete startup_task_timer");
+                       "Failed to delete startup status timer");
   }
 }
 
@@ -451,11 +382,11 @@ static void report_startup_status() {
   };
   ESP_ERROR_COMPLAIN(
       esp_timer_create(&startup_task_timer_args, &startup_task_timer),
-      "esp_timer_create startup_task_timer");
-  report_startup_status_task(NULL);  // manually run once without waiting for 5s
+      "Failed to create startup status timer");
+  report_startup_status_task(NULL);  // Run once immediately without waiting
   ESP_ERROR_COMPLAIN(esp_timer_start_periodic(startup_task_timer,
                                               startup_task_period_ms * 1e3),
-                     "esp_timer_start_periodic startup_task_timer");
+                     "Failed to start periodic startup status timer");
 }
 
 #if CONFIG_MCU_MODEL_FAKE_SW3566
@@ -463,7 +394,7 @@ static void update_fake_mode() {
   char model[8];
   size_t length = sizeof(model);
   DeviceNVSGet(model, &length, NVSKey::DEVICE_MODEL);
-  if (strcmp(model, "fake") == 0) {
+  if (strncmp(model, "fake", 8) == 0) {
     return;
   }
   char fake_model[] = "fake";
@@ -475,16 +406,34 @@ static void update_fake_mode() {
 
 static void start_boot_animation() {
   ESP_LOGI(TAG, "Creating boot animation");
-  animationController = &AnimationController::GetInstance();
-  animationController->StartTask();
-  animationController->StartAnimation(AnimationId::BOOT_APP, false);
+  DisplayManager &display_manager = DisplayManager::GetInstance();
+  display_manager.SetAnimation(AnimationType::BOOT_APP, false);
+}
+
+static void handle_system_reboot() {
+  ESP_LOGW(TAG, "should_reboot requested, rebooting");
+  for (Port &port : PortManager::GetInstance()) {
+    port.Shutdown();
+  }
+  esp_restart();
+}
+
+static void register_syslog_handler() {
+#ifdef CONFIG_ENABLE_GLOBAL_LOGGING_COLLECTOR
+  SyslogClient &syslog = SyslogClient::GetInstance();
+  ESP_ERROR_COMPLAIN(syslog.Initialize(), "Failed to initialize syslog");
+  syslog.Register(wifi_is_connected());
+#endif
 }
 
 void app_main() {
+#ifdef CONFIG_PM_ENABLE
   static const esp_pm_config_t pm_config = {
       .max_freq_mhz = 160,
       .min_freq_mhz = 80,
   };
+#endif
+
   esp_err_t ret __attribute__((unused));
 #if !CONFIG_ESP_TASK_WDT_INIT
   // If the TWDT was not initialized automatically on startup,
@@ -496,29 +445,45 @@ void app_main() {
   };
   ESP_ERROR_COMPLAIN(esp_task_wdt_init(&twdt_config), "esp_task_wdt_init");
   ESP_LOGI(TAG, "TWDT initialized");
-  xTaskCreate(feed_watchdog_task, "wdg", 1.5 * 1024, NULL, 17, nullptr);
+  xTaskCreate(feed_watchdog_task, "wdg", 1.5 * 1024, NULL,
+              CONFIG_WATCHDOG_TASK_PRIORITY, nullptr);
 #endif  // CONFIG_ESP_TASK_WDT_INIT
 
+  esp_log_level_set("wifi", ESP_LOG_WARN);
+  esp_log_level_set("mqtt_client", ESP_LOG_WARN);
+  esp_log_level_set("mqtt5_client", ESP_LOG_WARN);
   heap_caps_register_failed_alloc_callback(heap_caps_alloc_failed_hook);
+
+  reset_acdc();
 
   // Initialize NVS partitions
   ESP_GOTO_ON_ERROR(NVSPartition::Init(), AFTER_NVS_INIT, TAG,
-                    "NVSPartition::Init");
+                    "Failed to initialize NVS partition");
   set_mac_address();
   machine_info.LoadFromStorage();
   machine_info.PrintInfo();
-  report_firmware_versions();
-  controller = DeviceController::GetInstance();
 
 AFTER_NVS_INIT:
-  ESP_ERROR_COMPLAIN(Storage::Init(), "Storage::Init");
+  ESP_ERROR_COMPLAIN(Storage::Init(), "Failed to initialize storage");
+
+  DisplayManager &display_manager = DisplayManager::GetInstance();
+  ESP_GOTO_ON_ERROR(display_manager.Init(), AFTER_DISPLAY_INIT, TAG,
+                    "Failed to initialize display manager");
+  display_manager.StartTask();
+
+AFTER_DISPLAY_INIT:
 
 #ifdef CONFIG_ENABLE_RFTEST
   cert_test();
 #endif
 
-  ESP_ERROR_COMPLAIN(esp_pm_configure(&pm_config), "esp_pm_configure");
-  ESP_ERROR_COMPLAIN(start_ble_adv_task(), "start_ble_adv_task");
+#ifdef CONFIG_PM_ENABLE
+  ESP_ERROR_COMPLAIN(esp_pm_configure(&pm_config),
+                     "Failed to configure power management");
+#endif
+
+  ESP_ERROR_COMPLAIN(start_ble_adv_task(),
+                     "Failed to start BLE advertising task");
 
 #ifdef CONFIG_ENABLE_GLOBAL_LOGGING_COLLECTOR
   SyslogClient::GetInstance().Register();
@@ -527,119 +492,78 @@ AFTER_NVS_INIT:
   PortManager::GetInstance().StartTask();
 #if CONFIG_MCU_MODEL_FAKE_SW3566
   update_fake_mode();
-  ESP_LOGI(TAG, "Using fake SW3566 chip, all data are fabricated.");
+  ESP_LOGI(TAG, "Using fake SW3566 chip - all data is simulated");
   memset(chip_ready, true, sizeof(chip_ready));
   comm_interface_initialized = true;
 #else
   comm_interface_init();
 #endif  // CONFIG_MCU_MODEL_FAKE_SW3566
 
+  DeviceController &controller = DeviceController::GetInstance();
   if (!comm_interface_initialized) {
-    // Rollback
-    ESP_LOGW(TAG, "Failed to initialize communication interface; rolling back");
-    if (controller->is_in_ota()) {
-      ESP_LOGW(TAG, "In OTA mode; rolling back");
-      esp_ota_mark_app_invalid_rollback_and_reboot();
-    } else {
-      ESP_LOGW(TAG, "Not in OTA mode; not rolling back");
-    }
+    // Rollback due to communication interface initialization failure
+    ESP_LOGW(
+        TAG,
+        "Communication interface initialization failed - performing rollback");
+    controller.try_rollback();
   } else {
     start_boot_animation();
   }
 
   /* Start Wi-Fi task after initializing communication interface.
-   * Because we need to play animation during Wi-Fi connection.
-   * Hopefully, the system would be rollback if communication interface failed
-   * to initialize.
-   * If not, Wi-Fi task would be running without any animation.
+   * This ensures we can display animations during Wi-Fi connection.
+   * If communication interface initialization fails, the system will roll back.
+   * Otherwise, the Wi-Fi task will run without animation support.
    */
-  ESP_ERROR_COMPLAIN(wifi_initialize(), "wifi_initialize");
-  WiFiController::StartTask();
+  if (wifi_initialize() == ESP_OK) {
+    start_mdns_service();
+    WiFiController::StartTask();
+    if (!MQTTClient::Initialize()) {
+      ESP_LOGE(TAG,
+               "Failed to initialize MQTT client - remote control "
+               "functionality will be unavailable");
+    }
+  } else {
+    ESP_LOGE(TAG, "Failed to initialize Wi-Fi - system will be unavailable");
+  }
 
-  // Boot chips concurrently with Wi-Fi task. This will save some time.
+  App &app = App::GetInstance();
+  Handler::RegisterAllServices(app);
+
+  // Boot chips concurrently with Wi-Fi task to save time
   if (comm_interface_initialized) {
     // Boot chips
     if (!boot_chips()) {
-      ESP_LOGE(TAG, "All chips are dead, rolling back.");
-      if (controller->is_in_ota()) {
-        ESP_LOGW(TAG, "In OTA mode; rolling back");
-        esp_ota_mark_app_invalid_rollback_and_reboot();
-      } else {
-        ESP_LOGW(TAG, "Not in OTA mode; not rolling back");
-      }
+      ESP_LOGE(TAG, "All chips failed to boot - performing rollback");
+      controller.try_rollback();
     } else {
-      if (controller->is_in_ota()) {
-        ret = controller->confirm();
-        if (ret != ESP_OK) {
-          ESP_LOGE(TAG, "Failed to confirm OTA, rolling back");
-          controller->rollback_ota();
-        }
-      }
-#ifdef ENABLE_POWER_ALLOCATOR
-      start_allocator();
-#endif  // ENABLE_POWER_ALLOCATOR
-      set_port_configs();
+      controller.try_confirm();
     }
+
+    // If rollback occurs, system will reboot
+#ifdef ENABLE_POWER_ALLOCATOR
+    start_allocator();
+#endif  // ENABLE_POWER_ALLOCATOR
+    set_port_configs();
   }
 
   report_startup_status();
-
-  // 初始化 App 服务
-  App &app = App::GetInstance();
-  app.Init(*controller, *pAllocator);
-  Handler::RegisterAllServices(app);
-
-  xTaskCreate(handle_ble_messages_task, "ble", CONFIG_BLE_TASK_STACK_SIZE,
-              controller, 1, nullptr);
 
 #ifdef ENABLE_FPGA_ADC_MONITOR
   int64_t last_time = esp_timer_get_time(), first_time = last_time, now = 0;
 #endif
 
-  uint8_t mqtt_reconnect_count = 0;
-  bool mqtt_destroyed = false;
   while (true) {
     DELAY_MS(1 * 1000);
 
-    if (controller->should_reboot()) {
-      ESP_LOGW(TAG, "should_reboot requested, rebooting");
-#if CONFIG_MCU_MODEL_SW3566
-      for (uint8_t i = 0; i < NUM_PORTS; i++) {
-        ESP_ERROR_COMPLAIN(rpc::fpga::toggle_mcu_gpio(i),
-                           "Failed to toggle mcu %d gpio", i);
-      }
-#endif
-      esp_restart();
-    }
+    register_syslog_handler();
 
-#ifdef CONFIG_ENABLE_MQTT
-    MQTTClient *mqtt = MQTTClient::GetInstance();
-    if (mqtt_destroyed && wifi_controller.GetState() == WiFiStateType::IDLE) {
-      mqtt->Start();
-      mqtt_destroyed = false;
-      continue;
+    if (controller.should_reboot()) {
+      handle_system_reboot();
     }
-
-    if (!mqtt->NeedDestroy()) {
-      continue;
-    }
-
-    if (mqtt->GetConnectionDuration() > MQTT_APP_STABLE_CONNECTION_DURATION) {
-      mqtt_reconnect_count = 0;
-    } else if (mqtt_reconnect_count >= MQTT_MAX_RECONNECT_ATTEMPTS) {
-      wifi_controller.Notify(WiFiEventType::MQTT_DISCONNECTED);
-      mqtt_reconnect_count = 0;
-      continue;
-    }
-
-    mqtt_reconnect_count++;
-    ESP_LOGI(TAG, "MQTT reconnect attempts: %d", mqtt_reconnect_count);
-    MQTTClient::DestroyInstance();
-    mqtt_destroyed = true;
-#endif
 
 #ifdef ENABLE_AUTO_STREAM_DATA
-    TelemetryTask::GetInstance()->SubscribeTelemetryStream();
+    TelemetryTask::GetInstance().SubscribeTelemetryStream();
 #endif
 
 #ifdef ENABLE_FPGA_ADC_MONITOR
@@ -651,7 +575,7 @@ AFTER_NVS_INIT:
       continue;
     }
     last_time = now;
-    if (controller && !controller->is_upgrading()) {
+    if (!controller.is_upgrading()) {
       fpga_adc_monitor();
     }
 #endif  // ENABLE_FPGA_ADC_MONITOR
@@ -662,20 +586,14 @@ AFTER_NVS_INIT:
   ESP_ERROR_CHECK_WITHOUT_ABORT(esp_task_wdt_deinit());
   ESP_LOGI(TAG, "TWDT deinitialized");
 #endif  // !CONFIG_ESP_TASK_WDT_INIT
-
-  // Clean up before exit
-  if (pAllocator != nullptr) {
-    delete pAllocator;
-  }
-  if (controller != nullptr) {
-    delete controller;
-  }
 }
 
+#if !defined(CONFIG_MCU_MODEL_FAKE_SW3566)
 void comm_interface_init() {
   comm_interface_initialized = false;
 #if CONFIG_INTERFACE_TYPE_UART
-  ESP_RETURN_VOID_ON_ERROR(uart_init(), TAG, "uart_init() failed");
+  ESP_LOGI(TAG, "Initializing communication interface: UART");
+  ESP_RETURN_VOID_ON_ERROR(uart_init(), TAG, "Failed to initialize UART");
   fpga_init();
   uint8_t value;
   ESP_RETURN_VOID_ON_ERROR(rpc::fpga::read_adc_value(&value), TAG,
@@ -683,9 +601,10 @@ void comm_interface_init() {
   comm_interface_initialized = configure_fpga();
 #endif
 }
+#endif
 
 /*
- * boot all MCU chips, return true if any chip was booted
+ * Boot all MCU chips, return true if any chip was successfully booted
  */
 bool boot_chips() {
   memset(chip_ready,
@@ -719,13 +638,13 @@ bool boot_chips() {
     esp_err_t err = rpc::fpga::toggle_mcu_gpio(i);
     chip_ready[i] = err == ESP_OK;
     if (chip_ready[i]) {
-      ESP_LOGI(TAG, "Chip %d GPIO toggled, will reboot shortly.", i);
+      ESP_LOGI(TAG, "Chip %d GPIO toggled - will reboot shortly", i);
     } else {
       ESP_LOGE(TAG, "Failed to toggle GPIO for chip %d", i);
     }
   }
   ESP_LOGI(TAG, "Waiting for chips to return to bootloader");
-  DELAY_MS(3000);  // 3-second delay for chips to settle
+  DELAY_MS(3000);  // 3-second delay for chips to stabilize
   ESP_LOGI(TAG, "Booting all chips");
   rpc::mcu::boot_all(chip_ready, NUM_PORTS, SKIP_3566_UPGRADE);
 #endif
@@ -734,9 +653,9 @@ bool boot_chips() {
 }
 
 void vApplicationStackOverflowHook(TaskHandle_t xTask, char *pcTaskName) {
-  ESP_LOGE(TAG, "Stack overflow detected in task %s", pcTaskName);
+  ESP_LOGE(TAG, "Stack overflow detected in task: %s", pcTaskName);
 
-  // So that the syslog message can be reported.
+  // Allow time for syslog message to be reported
   DELAY_MS(100);
 
   const std::set<std::string> unimportant_tasks = {
@@ -745,9 +664,88 @@ void vApplicationStackOverflowHook(TaskHandle_t xTask, char *pcTaskName) {
   };
 
   if (unimportant_tasks.find(pcTaskName) != unimportant_tasks.end()) {
-    ESP_LOGE(TAG, "Killing offending task %s", pcTaskName);
+    ESP_LOGE(TAG, "Terminating non-critical task: %s", pcTaskName);
     vTaskDelete(xTask);
   } else {
     esp_restart();
   }
+}
+
+void start_mdns_service() {
+  // Initialize mDNS service
+  esp_err_t err = mdns_init();
+  if (err) {
+    ESP_LOGE(TAG, "mDNS initialization failed: 0x%x", err);
+    return;
+  }
+
+  const std::string &hostname = MachineInfo::GetInstance().GetMDNSHostname();
+  // Set hostname
+  mdns_hostname_set(hostname.c_str());
+  // Set default instance
+  mdns_instance_name_set(hostname.c_str());
+  mdns_service_add(NULL, "_http", "_tcp", 80, NULL, 0);
+}
+
+#else
+
+void app_main() {
+  ESP_LOGI(TAG, "Entering factory mode");
+  esp_task_wdt_config_t twdt_config = {
+      .timeout_ms = WATCHDOG_TIMEOUT,
+      .idle_core_mask = (1 << portNUM_PROCESSORS) - 1,  // Bitmask of all cores
+      .trigger_panic = true,
+  };
+  esp_err_t ret = esp_task_wdt_init(&twdt_config);
+  ESP_ERROR_CHECK(ret);
+  ESP_LOGI(TAG, "TWDT initialized");
+  xTaskCreate(feed_watchdog_task, "wdg", 1.5 * 1024, NULL,
+              CONFIG_WATCHDOG_TASK_PRIORITY, nullptr);
+
+#ifdef CONFIG_INTERFACE_TYPE_UART
+  ESP_RETURN_VOID_ON_ERROR(Storage::Init(), TAG, "Storage::Init failed");
+  ESP_RETURN_VOID_ON_ERROR(uart_init(), TAG, "uart_init() failed");
+  fpga_init();
+  uint8_t value;
+  ESP_RETURN_VOID_ON_ERROR(rpc::fpga::read_adc_value(&value), TAG,
+                           "FPGA is not operational");
+
+#if CONFIG_MCU_MODEL_SW3566
+  for (uint8_t i = 0; i < NUM_PORTS; i++) {
+    esp_err_t err = rpc::fpga::toggle_mcu_gpio(i);
+    if (err == ESP_OK) {
+      ESP_LOGI(TAG, "Chip %d GPIO toggled, will reboot shortly.", i);
+    } else {
+      ESP_LOGE(TAG, "Failed to toggle GPIO for chip %d", i);
+    }
+  }
+  ESP_LOGI(TAG, "Waiting for chips to return to bootloader");
+  DELAY_MS(3000);  // 3-second delay for chips to settle
+
+#endif
+#endif
+
+  while (true) {
+    DELAY_MS(1000);
+  }
+}
+#endif
+
+void feed_watchdog_task(void *arg) {
+  ESP_ERROR_CHECK(esp_task_wdt_add(nullptr));     // Subscribe this task to TWDT
+  ESP_ERROR_CHECK(esp_task_wdt_status(nullptr));  // Check if it is subscribed
+  ESP_LOGI(TAG, "TWDT is subscribed");
+  while (true) {
+    if (esp_get_free_heap_size() < 6 * 1024) {
+      // If the free heap size is less than 6KB, restart the system to free up
+      // memory
+      ESP_LOGW(TAG,
+               "Free heap size is below 6KB: %" PRIu32 " - restarting system",
+               esp_get_free_heap_size());
+      esp_restart();
+    }
+    esp_task_wdt_reset();  // Feed watchdog timer
+    DELAY_MS(50);
+  }
+  vTaskDelete(NULL);
 }

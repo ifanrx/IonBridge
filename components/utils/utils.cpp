@@ -5,38 +5,13 @@
 #include <sstream>
 
 #include "esp_log.h"
-#include "esp_ota_ops.h"
 #include "esp_system.h"
-#include "ionbridge.h"
 
 #define HASH_LENGTH 32
 // CRC-16-CCITT Polynomial
 #define CRC16_POLY 0x1021
 
 static const char *TAG = "Utils";
-
-bool validate_partition_hash(const uint8_t *hash, size_t length) {
-  if (length != HASH_LENGTH) {
-    ESP_LOGW(TAG, "Incorrect hash length: want %d, got %d", HASH_LENGTH,
-             length);
-    return false;
-  }
-
-  uint8_t runningPartitionHash[HASH_LENGTH];
-  const esp_partition_t *partition = esp_ota_get_running_partition();
-  ESP_RETURN_FALSE_ON_ERROR(
-      esp_partition_get_sha256(partition, runningPartitionHash),
-      "esp_partition_get_sha256");
-
-  for (size_t i = 0; i < HASH_LENGTH; i++) {
-    if (runningPartitionHash[i] != hash[i]) {
-      ESP_LOGW(TAG, "Hash mismatch at index %zu: want %02x, got %02x", i,
-               hash[i], runningPartitionHash[i]);
-      return false;
-    }
-  }
-  return true;
-}
 
 std::string to_hex_string(const uint8_t *data, size_t len) {
   std::stringstream ss;

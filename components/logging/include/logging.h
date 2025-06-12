@@ -3,24 +3,51 @@
 
 #include "freertos/ringbuf.h"
 
-#define RING_BUFFER_SIZE 256
-
 class LogCollector {
  public:
-  // Access the singleton instance
+  static constexpr size_t RING_BUFFER_SIZE = 256;
+  static constexpr TickType_t POP_TIMEOUT_MS = 100;
+  static constexpr TickType_t PUSH_TIMEOUT_MS = 0;
+
+  /**
+   * @brief Access the singleton instance
+   * @return Reference to the global LogCollector instance
+   */
   static LogCollector &GetInstance() {
     static LogCollector instance;  // Guaranteed to be destroyed.
                                    // Instantiated on first use.
     return instance;
   }
 
-  void Push(const char *data, size_t size);
-  void Pop(char *data, size_t *size);
+  /**
+   * @brief Push data into the ring buffer
+   * @param data Pointer to data to store
+   * @param size Size of the data in bytes
+   * @return true if successful, false if failed
+   * @thread-safety Thread-safe
+   */
+  bool Push(const char *data, size_t size);
+
+  /**
+   * @brief Pop data from the ring buffer
+   * @param data Buffer to store retrieved data
+   * @param size In: max buffer size; Out: actual data size
+   * @return true if data retrieved, false if buffer empty
+   * @thread-safety Thread-safe
+   */
+  bool Pop(char *data, size_t *size);
 
  private:
-  static uint8_t ring_buffer_[RING_BUFFER_SIZE];
+  uint8_t ring_buffer_[RING_BUFFER_SIZE];
   RingbufHandle_t buf_handle_ = nullptr;
   StaticRingbuffer_t buf_;
+  SemaphoreHandle_t mutex_ = NULL;
+
+  /**
+   * @brief Try to free space in the buffer
+   * @param needed_size Size in bytes to try freeing
+   */
+  void TryFreeSpace(size_t needed_size);
 
   LogCollector();
   ~LogCollector();

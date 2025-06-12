@@ -17,5 +17,6 @@ typedef struct {
 } firmware_version;
 
 esp_err_t start_upgrade_task(const firmware_version *new_version);
+esp_err_t start_download_task(const firmware_version *new_version);
 
 #endif  // FIRMWARE_UPGRADE_H_

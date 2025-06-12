@@ -44,7 +44,7 @@
 #define WAIT_FOR_CONDITION(condition, delay_time_ms) \
   do {                                               \
     while (!(condition)) {                           \
-      DELAY_MS(delay_time_ms);                       \
+      vTaskDelay(pdMS_TO_TICKS(delay_time_ms));      \
     }                                                \
   } while (0)
 
@@ -56,7 +56,7 @@
       if (condition) {                                                  \
         break;                                                          \
       }                                                                 \
-      DELAY_MS(delay_time_ms);                                          \
+      vTaskDelay(pdMS_TO_TICKS(delay_time_ms));                         \
     }                                                                   \
     if (_i == (max_times)) {                                            \
       ESP_LOGE(TAG, format, ##__VA_ARGS__);                             \

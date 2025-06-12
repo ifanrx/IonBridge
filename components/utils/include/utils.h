@@ -11,6 +11,13 @@
 #include "freertos/FreeRTOS.h"  // IWYU pragma: keep
 #include "freertos/task.h"      // IWYU pragma: keep
 
+#ifndef MAX
+#define MAX(a, b) ((a) > (b) ? (a) : (b))
+#endif
+#ifndef MIN
+#define MIN(a, b) ((a) < (b) ? (a) : (b))
+#endif
+
 #define INCREMENTAL_AVERAGE(old_avg, new_val, count)                           \
   (old_avg = old_avg +                                                         \
              (static_cast<int32_t>(new_val) - static_cast<int32_t>(old_avg)) / \
@@ -24,7 +31,6 @@ extern "C" {
 // static int global_log_buffer_position = 0;
 
 #define DELAY_MS(ms) vTaskDelay(pdMS_TO_TICKS(ms))
-bool validate_partition_hash(const uint8_t *hash, size_t length);
 std::string to_hex_string(const uint8_t *data, size_t len);
 uint32_t bytes_to_u32(const uint8_t *data);
 void int_to_bytes(uint8_t *bytes, int num);

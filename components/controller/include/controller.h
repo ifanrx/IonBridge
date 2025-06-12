@@ -7,10 +7,6 @@
 
 #include "esp_err.h"
 #include "esp_timer.h"
-#include "power_allocator.h"
-
-#define DISPLAY_DEFAULT_MODE CONFIG_DISPLAY_MODE
-#define DISPLAY_DEFAULT_INTENSITY CONFIG_DISPLAY_INTENSITY
 
 enum DeviceControllerStatus : uint8_t {
   POWER_UP,
@@ -32,12 +28,12 @@ class DeviceController {
   DeviceControllerStatus status_;
   esp_timer_handle_t confirmation_timer_ = nullptr, request_timer_ = nullptr;
   bool upgrading_ = false;
-  uint8_t display_intensity_ = DISPLAY_DEFAULT_INTENSITY;
-  uint8_t display_mode_ = DISPLAY_DEFAULT_MODE;
 
   bool normally_booted_ = false;
 
   int64_t reboot_at_ = 0;
+
+  bool associated_ = false;
 
  public:
   // Delete copy constructor and assignment operator
@@ -47,12 +43,13 @@ class DeviceController {
   virtual ~DeviceController() = default;
 
   // Static method to get the singleton instance
-  static DeviceController *GetInstance() {
+  static DeviceController &GetInstance() {
     static DeviceController instance;
-    return &instance;
+    return instance;
   }
 
   esp_err_t confirm();
+  void try_confirm();
   void waiting_for_confirmation();
   bool is_waiting_for_confirmation() {
     return status_ == DeviceControllerStatus::WAITING_FOR_CONFIRMATION;
@@ -62,37 +59,30 @@ class DeviceController {
   bool should_reboot();
   void reboot_after(int delay_ms = 0);
   void reboot();
-  int get_uptime() { return esp_timer_get_time(); }
   bool is_upgrading() { return upgrading_; }
-  void set_upgrading(bool upgrading) {
-    upgrading_ = upgrading;
-    if (upgrading_) {
-      PowerAllocator &pAllocator = PowerAllocator::GetInstance();
-      pAllocator.GetPortManager().ShutdownAllPorts();
-      pAllocator.Stop();
-    }
-  }
+  void set_upgrading(bool upgrading);
+
+  bool is_ota_pending_verify();
   bool is_in_ota() {
     return upgrading_ ||
            status_ == DeviceControllerStatus::REQUESTING_CONFIRMATION ||
            status_ == DeviceControllerStatus::WAITING_FOR_CONFIRMATION;
   };
-  void rollback_ota();
+  void rollback();
+  void try_rollback();
 
   // Power management
   esp_err_t power_off();
   esp_err_t power_on();
   bool is_power_on() { return status_ != POWER_DOWN; }
 
-  esp_err_t set_display_intensity(uint8_t intensity);
-  uint8_t get_display_intensity() { return display_intensity_; }
-  esp_err_t set_display_mode(uint8_t mode);
-  uint8_t get_display_mode() { return display_mode_; }
-
   void set_normally_booted(bool normally_booted) {
     normally_booted_ = normally_booted;
   }
   bool is_normally_booted() { return normally_booted_; }
+
+  void mark_associated() { associated_ = true; }
+  bool is_associated() { return associated_; }
 };
 
 #endif /* __CONTORLLER_H */

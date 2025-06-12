@@ -206,24 +206,17 @@ typedef struct __attribute__((packed)) {
   bool EnablePdCompatMode : 1;
   bool LimitedCurrentMode : 1;
   // BYTE 3
-  bool EnablePdPPS : 1;
+  bool EnablePdLVPPS : 1;
   bool EnablePdEPR : 1;
-  uint8_t reserved : 6;
+  bool EnablePd5V5A : 1;
+  bool EnablePdHVPPS : 1;
+  uint8_t reserved : 4;
 } PowerFeatures;
 
 typedef enum __attribute__((packed)) {
-  OFF = 0x00,
-  MANUAL = 0x01,
-  POWER_METER = 0x02,
-} DisplayMode;
-
-typedef enum __attribute__((packed)) {
-  NORMAL = 0x00,
-  FLIP = 0x01,
-} DisplayFlipMode;
-
-constexpr uint8_t MaxDisplayIntensity = 0xFF;
-constexpr uint8_t MinDisplayIntensity = 0x00;
-constexpr uint8_t NormalDisplayIntensity = 0x80;
+  PORT_TYPE_A = 0x00,
+  PORT_TYPE_C = 0x01,
+  PORT_TYPE_MAX,
+} PortType;
 
 #endif

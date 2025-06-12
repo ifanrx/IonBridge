@@ -1,24 +1,25 @@
+#include "port_state.h"
+
 #include <cstdint>
 
-#include "esp_check.h"
 #include "esp_err.h"
 #include "esp_log.h"
 #include "esp_timer.h"
-#include "freertos/idf_additions.h"
 #include "ionbridge.h"
 #include "port.h"
 #include "power_allocator.h"
 #include "rpc.h"
 #include "sdkconfig.h"
+#include "utils.h"
 
 #ifdef CONFIG_MCU_MODEL_SW3566
+#include "esp_check.h"
 #include "sw3566_data_types.h"
-#include "utils.h"
 #endif
 
 #define PORT_CHECKING_TIMER_MS CONFIG_PORT_CHECKING_TIMER_MS
 
-static const char *TAG = "PortStage";
+static const char *TAG = "PortState";
 
 void PortActiveState::Handle(Port &port) {
   if (port.Attached()) {
@@ -30,12 +31,18 @@ void PortActiveState::Handle(Port &port) {
 
 void PortAttachedState::Handle(Port &port) {
   if (!port.Attached()) {
-    ESP_LOGI(TAG, "Port %d is detached", port.Id());
+    ESP_LOGD(TAG, "Port %d is detached", port.Id());
+    port.UnsubscribePDPcapStreaming();
     port.Reset();
     port.SetState(PortStateType::ACTIVE);
     PowerAllocator::GetInstance().EnqueueEvent(
         PowerAllocatorEventType::PORT_DETACHED, port.Id());
   }
+}
+
+void PortInactiveState::Handle(Port &port) {
+  // update port historical data while port is inactive
+  port.SetInactiveHistoricalData();
 }
 
 void PortOpeningState::Handle(Port &port) {
@@ -178,31 +185,42 @@ void PortCheckingState::StartWatchdog(Port &port) {
     ESP_LOGW(TAG, "Port watchdog has already started for port %d.", port.Id());
     return;
   }
-  checking_timer_ =
-      xTimerCreate("port_watchdog", pdMS_TO_TICKS(PORT_CHECKING_TIMER_MS),
-                   pdFALSE, (void *)&port, WatchdogCallback);
-  xTimerStart(checking_timer_, 0);
-  ESP_LOGI(TAG, "Port watchdog has started for port %d.", port.Id());
+  const esp_timer_create_args_t timer_args = {
+      .callback = WatchdogCallback,
+      .arg = (void *)&port,
+      .dispatch_method = ESP_TIMER_TASK,
+      .name = "port_watchdog",
+      .skip_unhandled_events = true,
+  };
+  esp_err_t err = esp_timer_create(&timer_args, &checking_timer_);
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "Failed to create port watchdog timer: %s",
+             esp_err_to_name(err));
+    return;
+  }
+  err = esp_timer_start_once(checking_timer_, PORT_CHECKING_TIMER_MS * 1000);
+  ESP_LOGD(TAG, "Port watchdog has started for port %d.", port.Id());
 }
 
 void PortCheckingState::StopWatchdog() {
   if (checking_timer_ != nullptr) {
-    xTimerStop(checking_timer_, 0);
-    xTimerDelete(checking_timer_, 0);
+    esp_timer_stop(checking_timer_);
+    esp_timer_delete(checking_timer_);
+    DELAY_MS(50);
     checking_timer_ = nullptr;
-    ESP_LOGI(TAG, "Port watchdog stopped");
+    ESP_LOGD(TAG, "Port watchdog stopped");
   }
 }
 
-void PortCheckingState::WatchdogCallback(TimerHandle_t timer) {
+void PortCheckingState::WatchdogCallback(void *arg) {
 #ifdef CONFIG_MCU_MODEL_SW3566
-  Port *port = (Port *)pvTimerGetTimerID(timer);
+  Port *port = (Port *)arg;
   // Send the keep-alive message to the port
   KeepAliveStatus status;
   uint32_t uptime_ms;
   uint32_t reboot_reason;
   esp_err_t ret = ESP_OK;
-  ESP_LOGI(TAG, "Port %d watchdog callback started.", port->Id());
+  ESP_LOGD(TAG, "Port %d watchdog callback started.", port->Id());
   for (int i = 0; i < 3; i++) {
     ret = rpc::mcu::keep_alive(port->Id(), &status, &uptime_ms, &reboot_reason);
     if (ret == ESP_OK) {

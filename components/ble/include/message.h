@@ -5,13 +5,13 @@
 
 #include "protocol.h"
 
-// 4 handlers * 1024 bytes = 4KB
-#define MAX_CONCURRENT_CONN 4
-#define MAX_MESSAGE_SIZE 1024
-
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+// 4 handlers * 1024 bytes = 4KB
+#define MAX_CONCURRENT_CONN 4
+#define MAX_MESSAGE_SIZE 1024
 
 typedef struct {
   uint8_t id;  // This represents the message id
@@ -22,6 +22,10 @@ typedef struct {
   uint8_t expected_sequence;  // Tracks the expected sequence number for the
                               // next fragment
 } MessageFragHandler;
+
+#ifdef __cplusplus
+}
+#endif
 
 class MessageHandler : public IMessageHandler {
  private:
@@ -55,9 +59,5 @@ class MessageHandler : public IMessageHandler {
 
   void setPeerMTU(uint16_t peerMTU);
 };
-
-#ifdef __cplusplus
-}
-#endif
 
 #endif  // H_MESSAGE_

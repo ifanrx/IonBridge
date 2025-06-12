@@ -1,10 +1,10 @@
 #include "power_allocator.h"
 
-#include <algorithm>
 #include <cinttypes>
 #include <cstdint>
 #include <utility>
 
+#include "esp_check.h"
 #include "esp_err.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -12,18 +12,12 @@
 #include "freertos/projdefs.h"
 #include "ionbridge.h"
 #include "machine_info.h"
-#include "mqtt_message.h"
-#include "port.h"
 #include "port_manager.h"
 #include "portmacro.h"
 #include "power_config.h"
 #include "sdkconfig.h"
 #include "strategy.h"
-#include "telemetry_task.h"
-
-#if defined(CONFIG_MCU_MODEL_SW3566) || defined(CONFIG_MCU_MODEL_FAKE_SW3566)
-#include "rpc.h"
-#endif
+#include "utils.h"
 
 #define DEVICE_LOW_TEMP_THRESHOLD (power_config.device_low_temp_threshold)
 #define DEVICE_OVER_TEMP_DECREMENT (power_config.device_over_temp_decrement)
@@ -48,7 +42,7 @@
   CONFIG_FAST_CHARGING_STRATEGY_REALLOCATION_APPLY_COUNT
 
 static const char *TAG = "PowerAllocator";
-static uint8_t remaining_power = 0;
+static uint16_t kRemainingPower = 0;
 
 PowerAllocator &PowerAllocator::GetInstance() {
   static PowerAllocator instance;
@@ -76,38 +70,29 @@ esp_err_t PowerAllocator::Start() {
     return ESP_ERR_NO_MEM;
   }
 
-  mqttQueue_ = xQueueCreate(1, sizeof(MQTTMessage));
-  if (mqttQueue_ == nullptr) {
-    ESP_LOGE(TAG, "Unable to create MQTT message queue");
-    return ESP_ERR_NO_MEM;
-  }
-
   if (timer_handle_ == nullptr) {
-    timer_handle_ =
-        xTimerCreate("allocator_timer", pdMS_TO_TICKS(timer_period_), pdTRUE,
-                     static_cast<void *>(this), timer_callback_);
-    if (timer_handle_ != nullptr) {
-      xTimerStart(timer_handle_, 0);  // Start the timer with no delay
-    } else {
-      ESP_LOGE(TAG, "Unable to create timer");
-      return ESP_ERR_NO_MEM;
-    }
+    const esp_timer_create_args_t allocator_timer_args = {
+        .callback = &PowerAllocator::timer_callback_,
+        .arg = this,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "allocator_timer",
+        .skip_unhandled_events = true,
+    };
+    ESP_RETURN_ON_ERROR(esp_timer_create(&allocator_timer_args, &timer_handle_),
+                        TAG, "Failed to create timer");
+    ESP_RETURN_ON_ERROR(
+        esp_timer_start_periodic(timer_handle_, timer_period_ * 1e3), TAG,
+        "Failed to start allocator timer");
   }
 
   BaseType_t res =
-      xTaskCreate(&PowerAllocator::TaskLoopWrapper, "pa", 1024 * 2, this,
-                  CONFIG_UART_EVENT_TASK_PRIORITY, &taskHandle_);
+      xTaskCreate(&PowerAllocator::TaskLoopWrapper, "pwr_alloc", 2.5 * 1024,
+                  this, CONFIG_POWER_ALLOCATOR_TASK_PRIORITY, &taskHandle_);
   if (res != pdPASS) {
     ESP_LOGE(TAG, "Unable to create power_allocator task");
     return ESP_ERR_NO_MEM;
   }
 
-  res = xTaskCreate(&PowerAllocator::MqttTaskLoopWrapper, "pa_mqtt", 1024 * 2,
-                    this, CONFIG_UART_EVENT_TASK_PRIORITY, &mqttTaskHandle_);
-  if (res != pdPASS) {
-    ESP_LOGE(TAG, "Unable to create power_allocator_mqtt task");
-    return ESP_ERR_NO_MEM;
-  }
   return ESP_OK;
 }
 
@@ -134,19 +119,13 @@ void PowerAllocator::Configure(PowerStrategy *strategy,
   } else {
     type_ = FLEXAI_FAST_ALLOCATOR;
   }
+  configured_ = true;
 }
 
 void PowerAllocator::TaskLoopWrapper(void *pvParameters) {
   PowerAllocator *allocator = static_cast<PowerAllocator *>(pvParameters);
   if (allocator != nullptr) {
     allocator->TaskLoop();
-  }
-}
-
-void PowerAllocator::MqttTaskLoopWrapper(void *pvParameters) {
-  PowerAllocator *allocator = static_cast<PowerAllocator *>(pvParameters);
-  if (allocator != nullptr) {
-    allocator->MqttTaskLoop();
   }
 }
 
@@ -165,11 +144,11 @@ void PowerAllocator::TaskLoop() {
           break;
 
         case PowerAllocatorEventType::PORT_ATTACHED:
-          PortAttached();
+          PortAttached(event.port_id);
           break;
 
         case PowerAllocatorEventType::PORT_DETACHED:
-          PortDetached();
+          PortDetached(event.port_id);
           break;
 
         case PowerAllocatorEventType::REALLOCATE:
@@ -193,44 +172,14 @@ void PowerAllocator::TaskLoop() {
   vTaskDelete(nullptr);
 }
 
-void PowerAllocator::MqttTaskLoop() {
-  ESP_LOGI(TAG, "power_allocator_mqtt task is starting");
-  mqttTaskRunning_ = true;
-  PowerAllocatorMqttEvent event;
-
-  while (mqttTaskRunning_ && mqttQueue_ != nullptr) {
-    if (xQueueReceive(mqttQueue_, &event, portMAX_DELAY) == pdPASS) {
-      ESP_LOGD(TAG, "Received event: %d", static_cast<int>(event.event_type));
-      switch (event.event_type) {
-        case PowerAllocatorMqttEventType::REPORT_STATS:
-          ReportPowerStats();
-          break;
-
-        default:
-          ESP_LOGW(TAG, "power_allocator_mqtt: Unknown event type received: %d",
-                   static_cast<int>(event.event_type));
-          break;
-      }
-    }
-  }
-
-  ESP_LOGW(TAG, "power_allocator_mqtt task is terminating");
-  if (mqttQueue_ != nullptr) {
-    xQueueReset(mqttQueue_);
-    vQueueDelete(mqttQueue_);
-    mqttQueue_ = nullptr;
-  }
-  vTaskDelete(nullptr);
-}
-
 void PowerAllocator::Stop() {
   if (timer_handle_ != nullptr) {
-    xTimerStop(timer_handle_, 0);    // Stop the timer
-    xTimerDelete(timer_handle_, 0);  // Delete the timer
+    esp_timer_stop(timer_handle_);
+    esp_timer_delete(timer_handle_);
+    DELAY_MS(100);
     timer_handle_ = nullptr;
   }
   taskRunning_ = false;
-  mqttTaskRunning_ = false;
 }
 
 esp_err_t PowerAllocator::EnqueueEvent(PowerAllocatorEvent event) {
@@ -266,7 +215,7 @@ esp_err_t PowerAllocator::EnqueueEvent(PowerAllocatorEvent event) {
     ESP_LOGW(TAG, "Event queue is full; dropping event");
   } else if (res != pdPASS) {
     // Log an error if any other queue operation fails
-    ESP_LOGE(TAG, "Failed to enqueue power allocator event: %d", res);
+    ESP_LOGE(TAG, "Failed to enqueue power allocator event: %d", (int)res);
   }
 
   return res;
@@ -287,24 +236,9 @@ esp_err_t PowerAllocator::EnqueueEvent(PowerAllocatorEventType event_type,
   return EnqueueEvent(event);
 }
 
-void PowerAllocator::EnqueueMqttEvent(PowerAllocatorMqttEvent event) {
-  // If the queue is full, drop the event
-  BaseType_t res = xQueueSend(mqttQueue_, &event, EVENT_ENQUEUE_TIMEOUT);
-
-  if (res == errQUEUE_FULL) {
-    // MQTT queue length is 1, so silently drop the event
-    return;
-  }
-
-  if (res != pdPASS) {
-    ESP_LOGE(TAG, "Failed to enqueue Power Allocator MQTT event: %d", res);
-  }
-}
-
-void PowerAllocator::timer_callback_(TimerHandle_t timer) {
+void PowerAllocator::timer_callback_(void *arg) {
   // Retrieve the Allocator instance from the timer ID
-  PowerAllocator *allocator =
-      static_cast<PowerAllocator *>(pvTimerGetTimerID(timer));
+  PowerAllocator *allocator = static_cast<PowerAllocator *>(arg);
 
   // feed the event queue
   PowerAllocatorEvent event = {
@@ -327,6 +261,7 @@ void PowerAllocator::Execute() {
   static uint8_t prev_ports_connected_status = 0;
   static uint32_t executed = 0;
   uint8_t ports_connected_status = 0;
+  bool switched = false;
 
   if (OverTempLimitDetect()) {
     return;
@@ -340,13 +275,12 @@ void PowerAllocator::Execute() {
   this->executing_ = true;
   executed++;
 
-  bool switched = SwitchStrategy();
-
+  switched = SwitchStrategy();
   if (power_allocation_enabled_ && switched) {
     ESP_LOGI(TAG, "Power strategy changed to %d, initializing power allocator",
              strategy_->Type());
     strategy_->SetupInitialPower(port_manager_);
-    prev_ports_connected_status = port_manager_.GetPortsAttachedStatus();
+    prev_ports_connected_status = port_manager_.GetAttachedPortsBitMask();
     goto RET;
   }
 
@@ -354,7 +288,7 @@ void PowerAllocator::Execute() {
     HighTempDetect();
   }
 
-  ports_connected_status = port_manager_.GetPortsAttachedStatus();
+  ports_connected_status = port_manager_.GetAttachedPortsBitMask();
 
   if (((executed % apply_period_) == 0 ||
        ports_connected_status != prev_ports_connected_status) &&
@@ -362,12 +296,7 @@ void PowerAllocator::Execute() {
     if (power_allocation_enabled_) {
       ESP_LOGD(TAG, "Power strategy applied, execution count: %" PRIu32,
                executed);
-      remaining_power = strategy_->Apply(port_manager_);
-
-      PowerAllocatorMqttEvent event = {
-          .event_type = PowerAllocatorMqttEventType::REPORT_STATS,
-      };
-      EnqueueMqttEvent(event);
+      kRemainingPower = strategy_->Apply(port_manager_);
     }
   }
 
@@ -382,13 +311,24 @@ RET:
   this->executing_ = false;
 }
 
-void PowerAllocator::PortAttached() {
+void PowerAllocator::GetAllocationData(uint16_t *power_budget,
+                                       uint16_t *remaining_power) const {
+  if (strategy_ != nullptr) {
+    *power_budget = strategy_->MaxPowerBudget();
+    *remaining_power = kRemainingPower;
+  } else {
+    *power_budget = 0;
+    *remaining_power = 0;
+  }
+}
+
+void PowerAllocator::PortAttached(uint8_t port_id) {
   if (strategy_ != nullptr) {
     Execute();
   }
 }
 
-void PowerAllocator::PortDetached() {
+void PowerAllocator::PortDetached(uint8_t port_id) {
   if (strategy_ != nullptr) {
     Execute();
   }
@@ -397,32 +337,6 @@ void PowerAllocator::PortDetached() {
 void PowerAllocator::Reallocate() {
   if (strategy_ != nullptr) {
     Execute();
-  }
-}
-
-void PowerAllocator::ReportPowerStats() {
-  TelemetryTask *task = TelemetryTask::GetInstance();
-  uint8_t adc_value = 0;
-#if defined(CONFIG_MCU_MODEL_SW3566) || defined(CONFIG_MCU_MODEL_FAKE_SW3566)
-  ESP_ERROR_COMPLAIN(rpc::fpga::read_adc_value(&adc_value),
-                     "fpga::read_adc_value");
-#else
-  // FIXME:
-#endif
-
-  if (task != nullptr && port_manager_.Size() <= 8) {
-    PortPowerAllocation port_power_allocations[8] = {};
-    std::transform(port_manager_.begin(), port_manager_.end(),
-                   port_power_allocations,
-                   [](const Port &port) -> PortPowerAllocation {
-                     return PortPowerAllocation{
-                         .source_cap = port.MaxPowerBudget(),
-                         .usage = port.GetPowerUsage(),
-                     };
-                   });
-    task->ReportPowerAllocationData(strategy_->MaxPowerBudget(), 0,
-                                    remaining_power, adc_value,
-                                    port_power_allocations);
   }
 }
 
@@ -438,6 +352,9 @@ bool PowerAllocator::SwitchStrategy() {
         break;
       case StrategyType::TEMPORARY_CHARGING:
         type_ = TEMPORARY_ALLOCATOR;
+        break;
+      case StrategyType::USBA_CHARGING:
+        type_ = USBA_ALLOCATOR;
         break;
       default:
         ESP_LOGW(TAG, "Unsupported strategy: %d", strategy_buffer_->Type());
@@ -501,7 +418,7 @@ bool PowerAllocator::OverTempLimitDetect() {
   return over_temp_limit;
 }
 
-PowerAllocator *AllocatorBuilder::Build() {
+PowerAllocator &AllocatorBuilder::Build() {
   PortManager &port_manager = PortManager::GetInstance();
 
   for (uint8_t i = 0; i < port_count_; i++) {
@@ -513,6 +430,5 @@ PowerAllocator *AllocatorBuilder::Build() {
                       timer_period_);
 
   ESP_LOGD(TAG, "Power allocator configured");
-
-  return &allocator;
+  return allocator;
 }

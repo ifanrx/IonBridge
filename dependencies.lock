@@ -1,6 +1,6 @@
 dependencies:
   esp_nimble_cpp:
-    component_hash: e5355b2a8ea73b1298ea7a20030c50a765b7caff656fb2ce01f314754114e250
+    component_hash: 81e6d146edc402126e0bd525983cd44edd3b94042792d5e99f5a2e91544a16c4
     dependencies:
     - name: espressif/esp_hosted
       rules:
@@ -9,7 +9,7 @@ dependencies:
     - name: espressif/esp_wifi_remote
       rules:
       - if: target in [esp32p4]
-      version: '*'
+      version: <0.5.4
     - name: idf
       rules:
       - if: target in [esp32p4]
@@ -18,7 +18,167 @@ dependencies:
       git: https://github.com/h2zero/esp-nimble-cpp
       path: .
       type: git
-    version: b50a1b50b1a66e872e7d3dbff653e20f9a40e102
+    version: ec5600d40b22de68c09ba129e6571e6863755d84
+  espressif/cmake_utilities:
+    component_hash: 351350613ceafba240b761b4ea991e0f231ac7a9f59a9ee901f751bddc0bb18f
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=4.1'
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    version: 0.5.3
+  espressif/esp_lcd_gc9a01:
+    component_hash: 2ccbdfa5a1762c7a8be66770b69a256d809651d6069098852d2c829648707b5b
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=4.4'
+    - name: espressif/cmake_utilities
+      registry_url: https://components.espressif.com
+      require: private
+      version: 0.*
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.2.0
+  espressif/esp_lcd_ili9341:
+    component_hash: 31f1b793aa2110dd2ae071c21ccbff0a4eb20d9a4ee40b6294c0dc0ad9552c4e
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=4.4'
+    - name: espressif/cmake_utilities
+      registry_url: https://components.espressif.com
+      require: private
+      version: 0.*
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.2.0
+  espressif/esp_lv_decoder:
+    component_hash: 4188b3f76146271b2aebfcc09669e2e726764909465eebc5ee17b640db720e7b
+    dependencies:
+    - name: espressif/cmake_utilities
+      registry_url: https://components.espressif.com
+      require: private
+      version: 0.*
+    - name: espressif/esp_new_jpeg
+      registry_url: https://components.espressif.com
+      require: private
+      version: 0.5.*
+    - name: espressif/libpng
+      registry_url: https://components.espressif.com
+      require: private
+      version: 1.*
+    - name: idf
+      require: private
+      version: '>=4.4'
+    - name: lvgl/lvgl
+      registry_url: https://components.espressif.com
+      require: private
+      version: ^8
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    targets:
+    - esp32
+    - esp32s2
+    - esp32s3
+    - esp32p4
+    - esp32c2
+    - esp32c3
+    - esp32c5
+    - esp32c6
+    version: 0.1.2
+  espressif/esp_lvgl_port:
+    component_hash: e720c95cf0667554a204591bb5fade4655fb2990465557041200fa44b5bc7556
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=4.4'
+    - name: lvgl/lvgl
+      registry_url: https://components.espressif.com
+      require: public
+      version: '>=8,<10'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 2.6.0
+  espressif/esp_mmap_assets:
+    component_hash: 35dcc303d2bd4d1ca22b3b97e326360e61b181eacb554847bb880a350dcde40f
+    dependencies:
+    - name: espressif/cmake_utilities
+      registry_url: https://components.espressif.com
+      require: private
+      version: 0.*
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    targets:
+    - esp32
+    - esp32c2
+    - esp32c3
+    - esp32c6
+    - esp32h2
+    - esp32s2
+    - esp32s3
+    - esp32p4
+    version: 1.3.1
+  espressif/esp_new_jpeg:
+    component_hash: 7c07831bbf11d15f84f42dc0e127094c78063b03d0dce688495773656f998d2b
+    dependencies: []
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    targets:
+    - esp32
+    - esp32s2
+    - esp32s3
+    - esp32p4
+    - esp32c2
+    - esp32c3
+    - esp32c5
+    - esp32c6
+    version: 0.5.1
+  espressif/libpng:
+    component_hash: d2fb0a8234e65fa7dd0bd80841e955c53557b70ef405dbb2290303ae2f4219bd
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=4.4'
+    - name: espressif/zlib
+      registry_url: https://components.espressif.com
+      require: private
+      version: ^1.2.13
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    version: 1.6.39~1
+  espressif/mdns:
+    component_hash: 77ece55f01ce3723d8f1baff6e586fdb342adcbf956e39509a4fa323f278f290
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.8.1
+  espressif/zlib:
+    component_hash: d901723af51f13fc8e5824f39f32239c847956e8fd951a05266588dc5cfbb9ae
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=4.4'
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    version: 1.3.1
   idf:
     source:
       type: idf
@@ -33,10 +193,37 @@ dependencies:
       registry_url: https://components.espressif.com/
       type: service
     version: 1.14.8
+  larryli/bsp_generic:
+    component_hash: 85300922ee5857e8da75505cb28bf41554210a7cac3ec103b06fe085967bc73e
+    dependencies:
+    - name: idf
+      version: '>=5.2'
+    - name: espressif/esp_lcd_ili9341
+      version: ^1
+    - name: espressif/esp_lcd_gc9a01
+      version: ^1
+    - name: espressif/esp_lvgl_port
+      version: ^2
+    source:
+      git: https://github.com/hushday/esp-idf_bsp_generic
+      path: .
+      type: git
+    version: 802a2576628dae6bdd0a8b11837889065f0d8640
+  lvgl/lvgl:
+    component_hash: d7c1ac037ae6e85d94897f807d6e7ba0946a83e720074fc95a4f6241da9f9f53
+    dependencies: []
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    version: 8.4.0
 direct_dependencies:
 - esp_nimble_cpp
+- espressif/esp_lv_decoder
+- espressif/esp_mmap_assets
+- espressif/mdns
 - idf
 - joltwallet/littlefs
-manifest_hash: 7a294eab837e6c5ecd8246c7620dbd9177ee14c4166a5633daeb8b6db9e80325
+- larryli/bsp_generic
+manifest_hash: f8f10adb17c83dc1ea73f78adca5311e63bc8b64eb2592adc98e2408f0ef75b6
 target: esp32c3
 version: 2.0.0

@@ -56,6 +56,7 @@ static const std::string nvs_key_names[NVS_KEY_INT(NVS_KEY_COUNT)] = {
     [NVS_KEY_INT(DISPLAY_MODE)] = "mode",
     [NVS_KEY_INT(DISPLAY_INTENSITY)] = "intensity",
     [NVS_KEY_INT(DISPLAY_FLIP)] = "flip",
+    [NVS_KEY_INT(DISPLAY_IDLE_ANIMATION)] = "idle_anim",
 
     [NVS_KEY_INT(POWER_PORT_PRIORITY)] = "port_priority",
     [NVS_KEY_INT(POWER_ALLOCATOR_ENABLED)] = "alloc_enabled",

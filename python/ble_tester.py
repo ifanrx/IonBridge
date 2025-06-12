@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 # -*- coding=utf-8 -*-
 
 """
@@ -8,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 import binascii
-import ctypes
 import enum
 import json
 import os
@@ -20,15 +20,26 @@ import sys
 import time
 import typing
 from dataclasses import dataclass, field
-from itertools import count, takewhile
 from pprint import pprint
-from typing import Any, Iterator, Type
+from typing import Any, Type
 
 import asyncclick as click
 from bleak import BleakClient, BleakScanner
 from bleak.backends.characteristic import BleakGATTCharacteristic
 from bleak.backends.device import BLEDevice
 from bleak.backends.scanner import AdvertisementData
+
+from data_types.port import (
+    ClientPDStatus,
+    FastChargingProtocol,
+    PortConfigInternal,
+    PORTS,
+    PortType,
+)
+from data_types.service import SERVICE
+from data_types.strategy import ChargingStrategy
+from data_types.wifi import WiFiAuthMode, WiFiStateType
+import utils
 
 SERVICE_UUID = "048e3f2e-e1a6-4707-9e74-a930e898a1ea"
 TX_CHAR_UUID = "148e3f2e-e1a6-4707-9e74-a930e898a1ea"
@@ -42,108 +53,24 @@ ENVIRON_BLE_ADDRESS = os.environ.get("BLE_ADDRESS") or ""
 
 RX_HANDLER = Type[typing.Callable[[BleakGATTCharacteristic, bytearray], None]]
 
-PORTS: list[str] = ["A", "C1", "C2", "C3", "C4"]
-PORTS_NUM = len(PORTS)
-PORT_FEATURES: list[str] = ["overclock", "tfcp", "ufcs"]
+
+def cast_to_int(ctx, params, value) -> int:
+    try:
+        if isinstance(value, str) and value.lower().startswith("0x"):
+            value = int(value, 16)  # Attempt to parse as hex if it starts with '0x'
+        else:
+            value = int(value)  # Fallback to regular integer parsing
+    except (ValueError, TypeError):
+        raise click.BadParameter("Must be an integer")  # noqa: B904
+    return value
 
 
-class SERVICE(enum.IntEnum):
-    @property
-    def command(self: "SERVICE") -> str:
-        return self.name.lower().replace("_", "-")
-
-    # Internal
-    BLE_ECHO_TEST = 0x00  # BLE 回显测试
-    GET_DEBUG_LOG = 0x01  # 获取调试日志
-    GET_SECURE_BOOT_DIGEST = 0x02  # 获取 Secure Boot Digest
-    PING_MQTT_TELEMETRY = 0x03  # ping MQTT telemetry
-    PING_HTTP = 0x04  # ping HTTP
-    GET_DEVICE_PASSWORD = 0x05  # 获取密码
-    SET_TEST_MODE_A = 0x06  # 设置测试模式 A 定频发射
-    SET_TEST_MODE_B = 0x07  # 设置测试模式 B Single Tone
-    MANAGE_FPGA_CONFIG = 0x08  # 管理 FPGA 配置
-    MANAGE_POWER_ALLOCATOR_ENABLED = 0x09  # 管理 Power Allocator Enabled
-
-    # Device
-    ASSOCIATE_DEVICE = 0x10  # 关联设备
-    REBOOT_DEVICE = 0x11  # 重启设备
-    RESET_DEVICE = 0x12  # 重置设备
-    GET_DEVICE_SERIAL_NO = 0x13  # 获取设备序列号
-    GET_DEVICE_UPTIME = 0x14  # 获取设备运行时间
-    GET_AP_VERSION = 0x15  # 获取 ESP32 固件版本
-    GET_BP_VERSION = 0x16  # 获取 SW3566 固件版本
-    GET_FPGA_VERSION = 0x17  # 获取 FPGA 固件版本
-    GET_ZRLIB_VERSION = 0x18  # 获取 ZRLIB 版本
-    GET_DEVICE_BLE_ADDR = 0x19  # 获取设备BLE地址
-    SWITCH_DEVICE = 0x1A  # 开关设备
-    GET_DEVICE_SWITCH = 0x1B  # 获取开关状态
-    GET_DEVICE_MODEL = 0x1C  # 获取设备型号
-    PUSH_LICENSE = 0x1D  # 推送 license
-    GET_BLE_RSSI = 0x1E  # 获取 BLE RSSI
-
-    # OTA
-    PERFORM_BLE_OTA = 0x20  # 执行BLE OTA
-    PERFORM_WIFI_OTA = 0x21  # 执行WIFI OTA
-    GET_WIFI_OTA_PROGRESS = 0x22  # 获取WIFI OTA进度
-    CONFIRM_OTA = 0x23  # 确认OTA
-
-    # WIFI
-    SCAN_WIFI = 0x30  # 扫描WIFI
-    SET_WIFI_SSID = 0x31  # 设置WIFI SSID
-    SET_WIFI_PASSWORD = 0x32  # 设置WIFI密码
-    RESET_WIFI = 0x33  # 重置WIFI
-    GET_WIFI_STATUS = 0x34  # 获取连接的 WIFI SSID BSSID RSSI CHANNEL PROTOCOL
-    GET_DEVICE_WIFI_ADDR = 0x35  # 获取设备WIFI地址
-    SET_WIFI_SSID_AND_PASSWORD = 0x36  # 设置WIFI SSID和密码
-    GET_WIFI_RECORDS = 0x37  # 获取WIFI记录
-    OPERATE_WIFI_RECORD = 0x38  # 操作WIFI记录
-
-    # Power
-    TOGGLE_PORT_POWER = 0x40  # 切换端口
-    GET_POWER_STATISTICS = 0x41  # 获取电源统计
-    GET_POWER_SUPPLY_STATUS = 0x42  # 获取端口供电状态（是否供电）
-    SET_CHARGING_STRATEGY = 0x43  # 设置充电策略，有两种模式，分别是高速充电和智能慢充
-    GET_CHARGING_STATUS = 0x44  # 获取端口充电状态
-    GET_POWER_HISTORICAL_STATS = 0x45  # 获取历史电源统计
-    SET_PORT_PRIORITY = 0x46  # 设置端口优先级
-    GET_PORT_PRIORITY = 0x47  # 获取端口优先级
-    GET_CHARGING_STRATEGY = 0x48  # 获取充电策略
-    GET_PORT_PD_STATUS = 0x49  # 获取 PD 信息
-    GET_ALL_POWER_STATISTICS = 0x4A  # 获取全部端口电源统计
-    GET_START_CHARGE_TIMESTAMP = 0x4B  # 获取开始充电的时间戳
-    TURN_ON_PORT = 0x4C  # 打开端口
-    TURN_OFF_PORT = 0x4D  # 关闭端口
-    SET_PORT_OVERCLOCK_FEATURE = 0x4F
-    GET_PORT_OVERCLOCK_FEATURE = 0x50
-    SET_PORT_TFCP_FEATURE = 0x51  # 切换 TFCP
-    GET_PORT_TFCP_FEATURE = 0x52  # 查询 TFCP 状态
-    SET_PORT_UFCS_FEATURE = 0x53  # 切换 UFCS
-    GET_PORT_UFCS_FEATURE = 0x54  # 查询 UFCS 状态
-    SET_STATIC_ALLOCATOR = 0x55  # 设置老式充充电策略
-    GET_STATIC_ALLOCATOR = 0x56  # 获取老式充充电策略
-    SET_PORT_CONFIG = 0x57  # 设置端口配置
-    GET_PORT_CONFIG = 0x58  # 获取端口配置
-    SET_PORT_COMPATIBILITY_SETTINGS = 0x59  # 设置端口兼容性设置
-    GET_PORT_COMPATIBILITY_SETTINGS = 0x5A  # 获取端口兼容性设置
-    SET_TEMPERATURE_MODE = 0x5B  # 设置温度模式
-    SET_TEMPORARY_ALLOCATOR = 0x5C  # 设置临时充电策略
-
-    # Display
-    SET_DISPLAY_INTENSITY = 0x70
-    SET_DISPLAY_MODE = 0x71
-    GET_DISPLAY_INTENSITY = 0x72
-    GET_DISPLAY_MODE = 0x73
-    SET_DISPLAY_FLIP = 0x74  # 设置屏幕/灯正反方向
-    GET_DISPLAY_FLIP = 0x75  # 获取屏幕/灯正反方向
-    SET_DISPLAY_CONFIG = 0x76  # 设置屏幕/灯配置
-    SET_DISPLAY_STATE = 0x77  # 设置屏幕/灯状态
-    GET_DISPLAY_STATE = 0x78  # 获取屏幕/灯状态
-
-    # Telemetry Stream
-    START_TELEMETRY_STREAM = 0x90
-    STOP_TELEMETRY_STREAM = 0x91
-
-    GET_DEVICE_INFO = 0x92  # 获取设备信息
+def cast_to_bool(ctx, params, value) -> bool:
+    try:
+        return utils.eval_true(value)
+    except (ValueError, TypeError):
+        raise click.BadParameter("Must be a boolean")
+    return value
 
 
 class BLEFLAGS(enum.IntEnum):
@@ -160,158 +87,6 @@ class FRAGFLAGS(enum.IntEnum):
     FIRST_FRAG = 0x1
     MORE_FRAG = 0x2
     LAST_FRAG = 0x3
-
-
-class FastChargingProtocol(enum.IntEnum):
-    NONE = 0
-    QC2 = 1
-    QC3 = 2
-    QC3P = 3
-    SFCP = 4
-    AFC = 5
-    FCP = 6
-    SCP = 7
-    VOOC1P0 = 8
-    VOOC4P0 = 9
-    SVOOC2P0 = 10
-    TFCP = 11
-    UFCS = 12
-    PE1 = 13
-    PE2 = 14
-    PD_FIX5V = 15
-    PD_FIXHV = 16
-    PD_SPR_AVS = 17
-    PD_PPS = 18
-    PD_EPR_HV = 19
-    PD_AVS = 20
-    NOT_CHARGING = 0xFF
-
-
-class ChargingStrategy(enum.IntEnum):
-    FAST_CHARGING = 0
-    SLOW_CHARGING = 1
-    STATIC_CHARGING = 2
-    TEMPORARY_CHARGING = 3  # 临时分配模式
-
-
-class ClientPDStatus(ctypes.LittleEndianStructure):
-    _pack_ = 4
-    _fields_ = [
-        ("battery_vid", ctypes.c_uint16),
-        ("battery_pid", ctypes.c_uint16),  # 4 bytes
-        ("battery_design_capacity", ctypes.c_uint16),
-        ("battery_last_full_charge_capacity", ctypes.c_uint16),  # 8 bytes
-        ("battery_present_capacity", ctypes.c_uint16),
-        ("battery_invalid", ctypes.c_uint8, 1),
-        ("battery_present", ctypes.c_uint8, 1),
-        ("battery_status", ctypes.c_uint8, 2),
-        ("cable_is_active", ctypes.c_uint8, 1),
-        ("cable_termination_type", ctypes.c_uint8, 1),
-        ("cable_epr_mode_capable", ctypes.c_uint8, 1),
-        ("cable_active_phy_type", ctypes.c_uint8, 1),
-        ("cable_latency", ctypes.c_uint8, 4),
-        ("cable_max_vbus_voltage", ctypes.c_uint8, 2),
-        ("cable_max_vbus_current", ctypes.c_uint8, 2),
-        ("cable_usb_highest_speed", ctypes.c_uint8, 3),
-        ("cable_active_element", ctypes.c_uint8, 1),
-        ("cable_active_usb4", ctypes.c_uint8, 1),
-        ("cable_active_usb2p0", ctypes.c_uint8, 1),
-        ("cable_active_usb3p2", ctypes.c_uint8, 1),
-        ("cable_active_usb_lanes", ctypes.c_uint8, 1),
-        ("cable_active_optically_isolated", ctypes.c_uint8, 1),
-        ("cable_active_usb4_asym", ctypes.c_uint8, 1),
-        ("cable_active_usb_gen", ctypes.c_uint8, 1),
-        ("request_epr_mode_capable", ctypes.c_uint8, 1),
-        ("request_pdo_id", ctypes.c_uint8, 4),
-        ("request_usb_communications_capable", ctypes.c_uint8, 1),
-        ("request_capability_mismatch", ctypes.c_uint8, 1),
-        ("sink_capabilities", ctypes.c_uint8, 4),
-        ("sink_cap_pdo_count", ctypes.c_uint8, 2),
-        ("status_temperature", ctypes.c_uint8),
-        ("cable_vid", ctypes.c_uint16),
-        ("cable_pid", ctypes.c_uint16),
-        ("manufacturer_vid", ctypes.c_uint16),
-        ("manufacturer_pid", ctypes.c_uint16),
-        ("sink_minimum_pdp", ctypes.c_uint8),
-        ("sink_operational_pdp", ctypes.c_uint8),
-        ("sink_maximum_pdp", ctypes.c_uint8),
-        ("unused0", ctypes.c_uint8),
-        ("operating_current", ctypes.c_uint16, 10),
-        ("pd_revision", ctypes.c_uint8, 2),
-        ("unused1", ctypes.c_uint8, 4),
-        ("operating_voltage", ctypes.c_uint16, 15),
-        ("request_ppsavs", ctypes.c_uint16, 1),
-        ("cable_xid", ctypes.c_uint32),
-        ("bcd_device", ctypes.c_uint16),
-        ("unused2", ctypes.c_uint16),
-        ("unused3", ctypes.c_uint32 * 14),
-    ]
-
-    @classmethod
-    def from_bytes(cls, data: bytes | bytearray):
-        """Convert incoming data bytes to a ClientPDStatus instance."""
-        expected_size = ctypes.sizeof(cls)
-        actual_size = len(data)
-        if actual_size != expected_size:
-            raise ValueError(f"Expected {expected_size} bytes, got {actual_size}")
-        return cls.from_buffer_copy(data)
-
-    def __str__(self):
-        """Human-readable string representation of the structure."""
-        fields_str = []
-        for field_name, field_type, *rest in self._fields_:
-            value = getattr(self, field_name)
-            if isinstance(field_type, ctypes.Array):
-                value = list(value)
-            fields_str.append(f"  {field_name}={value}")
-        return "ClientPDStatus(\n" + ",\n".join(fields_str) + "\n)"
-
-
-class WifiAuthMode(enum.IntEnum):
-    WIFI_AUTH_OPEN = 0  # authenticate mode : open
-    WIFI_AUTH_WEP = 1  # authenticate mode : WEP
-    WIFI_AUTH_WPA_PSK = 2  # authenticate mode : WPA_PSK
-    WIFI_AUTH_WPA2_PSK = 3  # authenticate mode : WPA2_PSK
-    WIFI_AUTH_WPA_WPA2_PSK = 4  # authenticate mode : WPA_WPA2_PSK
-    WIFI_AUTH_ENTERPRISE = 5  # authenticate mode : WiFi EAP security
-    WIFI_AUTH_WPA2_ENTERPRISE = (
-        5  # authenticate mode : WiFi EAP security (same as WIFI_AUTH_ENTERPRISE)
-    )
-    WIFI_AUTH_WPA3_PSK = 6  # authenticate mode : WPA3_PSK
-    WIFI_AUTH_WPA2_WPA3_PSK = 7  # authenticate mode : WPA2_WPA3_PSK
-    WIFI_AUTH_WAPI_PSK = 8  # authenticate mode : WAPI_PSK
-    WIFI_AUTH_OWE = 9  # authenticate mode : OWE
-    WIFI_AUTH_WPA3_ENT_192 = 10  # authenticate mode : WPA3_ENT_SUITE_B_192_BIT
-    WIFI_AUTH_MAX = 11  # Max value for authentication modes
-
-    @classmethod
-    def get_name_from_value(cls, value: int) -> str:
-        """Return the name of the enum corresponding to the given value."""
-        try:
-            return cls(value).name
-        except ValueError:
-            return f"Unknown: {value}"
-
-
-def to_int8(b: int) -> int:
-    return struct.unpack(">b", (b & 0xFF).to_bytes(1, "big"))[0]
-
-
-def to_uint8(b: int) -> int:
-    return struct.unpack(">B", (b & 0xFF).to_bytes(1, "big"))[0]
-
-
-def to_uint32(b: int) -> typing.Sequence[int]:
-    return struct.unpack(">BBBB", (b & 0xFFFFFFFF).to_bytes(4, "big"))
-
-
-def bytes_to_int(sequence: typing.Sequence[int]) -> int:
-    # Ensure the sequence has exactly 4 elements
-    if len(sequence) != 4:
-        raise ValueError("Sequence must have exactly 4 elements.")
-
-    # Pack the sequence of bytes into a single 32-bit integer
-    return struct.unpack(">I", struct.pack("4B", *sequence))[0]
 
 
 @dataclass
@@ -337,11 +112,11 @@ class BLEHeader:
 
     @property
     def size(self: "BLEHeader") -> int:
-        return bytes_to_int(self.size_t)
+        return utils.bytes_to_int(self.size_t)
 
     @size.setter
     def size(self: "BLEHeader", value: int) -> None:
-        self.size_t = to_uint32(value & 0xFFFFFFFF)
+        self.size_t = utils.to_uint32(value & 0xFFFFFFFF)
 
     @property
     def checksum(self: "BLEHeader") -> int:
@@ -353,11 +128,11 @@ class BLEHeader:
             raise ValueError("Invalid checksum")
 
     def __post_init__(self: "BLEHeader") -> None:
-        self.version = to_uint8(self.version)
-        self.msg_id = to_uint8(self.msg_id)
-        self.service = to_int8(self.service)
-        self.sequence = to_uint8(self.sequence)
-        self.flags = to_uint8(self.flags)
+        self.version = utils.to_uint8(self.version)
+        self.msg_id = utils.to_uint8(self.msg_id)
+        self.service = utils.to_int8(self.service)
+        self.sequence = utils.to_uint8(self.sequence)
+        self.flags = utils.to_uint8(self.flags)
 
     def to_bytes(self: "BLEHeader") -> bytearray:
         data = bytearray()
@@ -371,7 +146,7 @@ class BLEHeader:
         return data
 
     def calc_checksum(self: "BLEHeader") -> int:
-        return to_uint8(
+        return utils.to_uint8(
             sum(
                 [
                     self.version,
@@ -454,14 +229,6 @@ class Message:
 
     def __len__(self) -> int:
         return len(self.header) + len(self.payload)
-
-
-def sliced(data: bytearray, n: int) -> Iterator[bytes | bytearray]:
-    """
-    Slices *data* into chunks of size *n*. The last slice may be smaller than
-    *n*.
-    """
-    return takewhile(len, (data[i : i + n] for i in count(0, n)))
 
 
 def detection_callback(
@@ -641,7 +408,6 @@ async def main() -> None:
         print(
             f'Using BLE address: {ENVIRON_BLE_ADDRESS} from environment variable "BLE_ADDRESS"',  # noqa: E501
         )
-    pass
 
 
 @main.command("scan")
@@ -1067,34 +833,38 @@ async def wifi_ssid_and_password(
 @main.command(SERVICE.GET_WIFI_RECORDS.command)
 @click.option("-a", "--address", type=str, default=None)
 async def get_wifi_records(address: str) -> None:
+    payload = bytearray()
     def handle_rx(_: BleakGATTCharacteristic, data: bytearray) -> None:
         msg = Message.from_bytes(data)
         click.secho(f"Received: {binascii.hexlify(data)} => {msg}")
         if len(msg.payload) < 2:
             return
-        status = struct.unpack_from("B", msg.payload, 0)[0]
+        payload.extend(msg.payload)
+        if (msg.header.flags & BLEFLAGS.FIN) != BLEFLAGS.FIN:
+            return
+        status = struct.unpack_from("B", payload, 0)[0]
         if status != 0:
             click.secho("Something went wrong, please check the ESP32 logs")
             return
-        ssid_count = struct.unpack_from("B", msg.payload, 1)[0]
+        ssid_count = struct.unpack_from("B", payload, 1)[0]
         if ssid_count == 0:
             click.secho("No SSID found", fg="green")
             return
         offset = 2
         ssid_list = []
         for _i in range(ssid_count):
-            ssid_length = struct.unpack_from("B", msg.payload, offset)[0]
+            ssid_length = struct.unpack_from("B", payload, offset)[0]
             offset += 1
-            ssid = struct.unpack_from(f"{ssid_length}s", msg.payload, offset)[0]
+            ssid = struct.unpack_from(f"{ssid_length}s", payload, offset)[0]
             offset += ssid_length
-            auth_mode = struct.unpack_from("B", msg.payload, offset)[0]
+            auth_mode = struct.unpack_from("B", payload, offset)[0]
             offset += 1
 
             ssid_list.append(
                 {
                     "ssid_length": ssid_length,
                     "ssid": ssid.decode("utf-8"),
-                    "auth_mode": WifiAuthMode.get_name_from_value(auth_mode),
+                    "auth_mode": WiFiAuthMode.get_name_from_value(auth_mode),
                 },
             )
 
@@ -1135,6 +905,37 @@ async def operate_wifi_record(
     payload.extend(password.encode("utf-8"))
     await send_cmd(
         SERVICE.OPERATE_WIFI_RECORD, payload, address, handle_rx=check_success_rx
+    )
+
+
+@main.command(SERVICE.GET_WIFI_STATE_MACHINE.command)
+@click.option("-a", "--address", type=str, default=None)
+async def get_wifi_state_machine(address: str) -> None:
+    def handle_rx(_: BleakGATTCharacteristic, data: bytearray) -> None:
+        msg = Message.from_bytes(data)
+        click.secho(f"Received: {binascii.hexlify(data)} => {msg}")
+        if len(msg.payload) < 2:
+            return
+        status = struct.unpack_from("B", msg.payload, 0)[0]
+        if status != 0:
+            click.secho("Something went wrong, please check the ESP32 logs")
+            return
+        state = struct.unpack_from("B", msg.payload, 1)[0]
+        click.secho(f"State: {WiFiStateType(state).name}", fg="green")
+
+    await send_cmd(
+        SERVICE.GET_WIFI_STATE_MACHINE, bytearray(), address, handle_rx=handle_rx
+    )
+
+
+@main.command(SERVICE.SET_WIFI_STATE_MACHINE.command)
+@click.argument("state", type=int)
+@click.option("-a", "--address", type=str, default=None)
+async def set_wifi_state_machine(state: int, address: str) -> None:
+    await send_cmd(
+        SERVICE.SET_WIFI_STATE_MACHINE,
+        bytearray([WiFiStateType.from_int(state)]),
+        address,
     )
 
 
@@ -1260,7 +1061,7 @@ async def wifi_scan(address: str) -> None:
                     "ssid_length": ssid_length,
                     "ssid": ssid.decode("utf-8"),
                     "rssi": rssi,
-                    "auth_mode": WifiAuthMode.get_name_from_value(auth_mode),
+                    "auth_mode": WiFiAuthMode.get_name_from_value(auth_mode),
                     "stored": bool(stored),
                 },
             )
@@ -1812,28 +1613,16 @@ async def reboot(address: str) -> None:
     await send_cmd(SERVICE.REBOOT_DEVICE, bytearray(), address)
 
 
-def cast_to_int(ctx, params, value) -> int:
-    try:
-        if isinstance(value, str) and value.lower().startswith("0x"):
-            value = int(value, 16)  # Attempt to parse as hex if it starts with '0x'
-        else:
-            value = int(value)  # Fallback to regular integer parsing
-    except (ValueError, TypeError):
-        raise click.BadParameter("Must be an integer")  # noqa: B904
-    return value
-
-
 @main.command(SERVICE.SET_CHARGING_STRATEGY.command)
-@click.argument("strategy", type=click.Choice(["fast", "slow"]))
+@click.argument("strategy", type=click.Choice(["fast", "slow", "usba"], case_sensitive=False))
 @click.option("-a", "--address", type=str, default=None)
 async def set_charging_strategy(strategy: str, address: str) -> None:
     payload = bytearray([0])
-    if strategy.lower() == "slow":
-        payload[0] = 1
+    strategy_mapping = {"fast": 0, "slow": 1, "usba": 5}
+    payload[0] = strategy_mapping.get(strategy.lower(), 0)
     await send_cmd(
         SERVICE.SET_CHARGING_STRATEGY, payload, address, handle_rx=check_success_rx
     )
-
 
 
 @main.command(SERVICE.SET_DISPLAY_INTENSITY.command)
@@ -2109,73 +1898,6 @@ async def get_ble_rssi(address: str) -> None:
     await send_cmd(SERVICE.GET_BLE_RSSI, bytearray(), address, handle_rx=handle_msg_rx)
 
 
-@main.command("set-port-feature")
-@click.argument("port", type=click.Choice(PORTS, case_sensitive=False))
-@click.argument("feature", type=click.Choice(PORT_FEATURES, case_sensitive=False))
-@click.argument("enable", type=click.Choice(["on", "off"], case_sensitive=False))
-@click.option("-a", "--address", type=str, default=None)
-async def set_port_feature(port: str, feature: str, enable: str, address: str) -> None:
-    match feature:
-        case "overclock":
-            cmd = SERVICE.SET_PORT_OVERCLOCK_FEATURE
-        case "tfcp":
-            cmd = SERVICE.SET_PORT_TFCP_FEATURE
-        case "ufcs":
-            cmd = SERVICE.SET_PORT_UFCS_FEATURE
-        case _:
-            raise click.ClickException(f"Unknown feature: {feature}")
-
-    await send_cmd(
-        cmd,
-        bytearray([PORTS.index(port) & 0xFF, enable == "on"]),
-        address,
-        handle_rx=check_success_rx,
-    )
-    click.secho("Done", fg="green")
-
-
-@main.command("get-port-feature")
-@click.argument("port", type=click.Choice(PORTS, case_sensitive=False))
-@click.argument("feature", type=click.Choice(PORT_FEATURES, case_sensitive=False))
-@click.option("-a", "--address", type=str, default=None)
-async def get_port_feature(port: str, feature: str, address: str) -> None:
-    match feature:
-        case "overclock":
-            cmd = SERVICE.GET_PORT_OVERCLOCK_FEATURE
-        case "tfcp":
-            cmd = SERVICE.GET_PORT_TFCP_FEATURE
-        case "ufcs":
-            cmd = SERVICE.GET_PORT_UFCS_FEATURE
-        case _:
-            raise click.ClickException(f"Unknown feature: {feature}")
-
-    def handle_msg_rx(_: BleakGATTCharacteristic, data: bytearray) -> None:
-        msg = Message.from_bytes(data)
-        click.secho(f"Received: {binascii.hexlify(data)} => {msg}")
-        if abs(msg.header.service) != cmd:
-            return
-        if msg.header.flags != BLEFLAGS.ACK:
-            return
-
-        status, enabled = struct.unpack("<B?", msg.payload)
-        if status != 0:
-            click.secho(
-                f"Error getting port {feature} status: {status}",
-                err=True,
-                fg="red",
-            )
-            return
-
-        click.secho(f"Port {port} {feature} enabled: {enabled}", fg="green")
-
-    await send_cmd(
-        cmd,
-        bytearray([PORTS.index(port) & 0xFF]),
-        address,
-        handle_rx=handle_msg_rx,
-    )
-
-
 @main.command(SERVICE.SET_STATIC_ALLOCATOR.command)
 @click.argument("identifier", type=click.IntRange(0, 0xFFFF))
 @click.argument("version", type=click.IntRange(0, 0xFF))
@@ -2231,82 +1953,109 @@ async def get_static_allocator(address: str) -> None:
     )
 
 
-@dataclass
-class PortConfig:
-    version: int
-    is_tfcp_enabled: bool
-    is_pe_enabled: bool
-    is_qc2p0_enabled: bool
-    is_qc3p0_enabled: bool
-    is_qc3plus_enabled: bool
-    is_afc_enabled: bool
-    is_fcp_enabled: bool
-    is_hvscp_enabled: bool
-    is_lvscp_enabled: bool
-    is_sfcp_enabled: bool
-    is_apple_enabled: bool
-    is_samsung_enabled: bool
-    is_ufcs_enabled: bool
-    is_pd_enabled: bool
-
-    def serialize(self) -> bytearray:
-        data = bytearray([self.version])
-        n = 0
-        n |= self.is_tfcp_enabled << 0
-        n |= self.is_pe_enabled << 1
-        n |= self.is_qc2p0_enabled << 2
-        n |= self.is_qc3p0_enabled << 3
-        n |= self.is_qc3plus_enabled << 4
-        n |= self.is_afc_enabled << 5
-        n |= self.is_fcp_enabled << 6
-        n |= self.is_hvscp_enabled << 7
-        n |= self.is_lvscp_enabled << 8
-        n |= self.is_sfcp_enabled << 9
-        n |= self.is_apple_enabled << 10
-        n |= self.is_samsung_enabled << 11
-        n |= self.is_ufcs_enabled << 12
-        n |= self.is_pd_enabled << 13
-        data.extend(struct.pack("<H", n))
-        return data
-
-    @classmethod
-    def deserialize(cls, data: bytearray) -> "PortConfig":
-        version, n1, n2 = struct.unpack("<BBB", data)
-        return cls(
-            version=version,
-            is_tfcp_enabled=((n1 >> 0) & 0x01) != 0,
-            is_pe_enabled=((n1 >> 1) & 0x01) != 0,
-            is_qc2p0_enabled=((n1 >> 2) & 0x01) != 0,
-            is_qc3p0_enabled=((n1 >> 3) & 0x01) != 0,
-            is_qc3plus_enabled=((n1 >> 4) & 0x01) != 0,
-            is_afc_enabled=((n1 >> 5) & 0x01) != 0,
-            is_fcp_enabled=((n1 >> 6) & 0x01) != 0,
-            is_hvscp_enabled=((n1 >> 7) & 0x01) != 0,
-            is_lvscp_enabled=((n2 >> 0) & 0x01) != 0,
-            is_sfcp_enabled=((n2 >> 1) & 0x01) != 0,
-            is_apple_enabled=((n2 >> 2) & 0x01) != 0,
-            is_samsung_enabled=((n2 >> 3) & 0x01) != 0,
-            is_ufcs_enabled=((n2 >> 4) & 0x01) != 0,
-            is_pd_enabled=((n2 >> 5) & 0x01) != 0,
+async def set_port_config_internal(
+    ports: typing.Tuple[str],
+    version: int,
+    tfcp: bool,
+    pe: bool,
+    qc2p0: bool,
+    qc3p0: bool,
+    qc3plus: bool,
+    afc: bool,
+    fcp: bool,
+    hvscp: bool,
+    lvscp: bool,
+    sfcp: bool,
+    apple: bool,
+    samsung: bool,
+    ufcs: bool,
+    pd: bool,
+    pdcompat: bool,
+    pd_lvpps: bool,
+    pdepr: bool,
+    pdrpi: bool,
+    pd_hvpps: bool,
+    address: str,
+) -> None:
+    default_value = [version, 0, 0]
+    if version == 1:
+        default_value = [version, 0, 0, 0]
+    payload = bytearray()
+    set_ports = 0
+    for i, port in enumerate(PORTS):
+        if port not in ports:
+            payload.extend(default_value)
+            continue
+        set_ports |= 1 << i
+        config = PortConfigInternal(
+            version,
+            tfcp,
+            pe,
+            qc2p0,
+            qc3p0,
+            qc3plus,
+            afc,
+            fcp,
+            hvscp,
+            lvscp,
+            sfcp,
+            apple,
+            samsung,
+            ufcs,
+            pd,
+            is_pd_compat_mode=pdcompat,
+            is_pd_lvpps_enabled=pd_lvpps,
+            is_pdepr_enabled=pdepr,
+            is_pdrpi_enabled=pdrpi,
+            is_pd_hvpps_enabled=pd_hvpps,
         )
+        payload.extend(config.serialize())
+    for _ in range(8 - len(PORTS)):
+        payload.extend(default_value)
+    payload.insert(0, set_ports)
+    await send_cmd(
+        SERVICE.SET_PORT_CONFIG if version == 0 else SERVICE.SET_PORT_CONFIG1,
+        payload,
+        address,
+        handle_rx=check_success_rx,
+    )
 
-    def __str__(self) -> str:
-        return f"""version: {self.version}
-        is_tfcp_enabled: {self.is_tfcp_enabled}
-        is_pe_enabled: {self.is_pe_enabled}
-        is_qc2p0_enabled: {self.is_qc2p0_enabled}
-        is_qc3p0_enabled: {self.is_qc3p0_enabled}
-        is_qc3plus_enabled: {self.is_qc3plus_enabled}
-        is_afc_enabled: {self.is_afc_enabled}
-        is_fcp_enabled: {self.is_fcp_enabled}
-        is_hvscp_enabled: {self.is_hvscp_enabled}
-        is_lvscp_enabled: {self.is_lvscp_enabled}
-        is_sfcp_enabled: {self.is_sfcp_enabled}
-        is_apple_enabled: {self.is_apple_enabled}
-        is_samsung_enabled: {self.is_samsung_enabled}
-        is_ufcs_enabled: {self.is_ufcs_enabled}
-        is_pd_enabled: {self.is_pd_enabled}
-        """
+
+async def get_port_config_internal(version: int, address: str) -> None:
+    def handle_msg_rx(_: BleakGATTCharacteristic, data: bytearray) -> None:
+        msg = Message.from_bytes(data)
+        if msg.header.size == 1:
+            # 去掉中间阶段的空成功响应
+            return
+
+        status = msg.payload[0]
+        if status != 0:
+            click.secho(
+                "Failed to perform service {}. Status: {}".format(
+                    SERVICE(abs(msg.header.service)).name, status
+                ),
+                err=True,
+                fg="red",
+            )
+            return
+        offset = 1
+        size = 3
+        if version == 1:
+            size = 4
+        for i in range(5):
+            config = PortConfigInternal.deserialize(msg.payload[offset : offset + size])
+            click.secho(
+                f"port {i}: {msg.payload[offset:offset+size].hex()}", fg="green"
+            )
+            click.secho(f"{config}", fg="green")
+            offset += size
+
+    await send_cmd(
+        SERVICE.GET_PORT_CONFIG if version == 0 else SERVICE.GET_PORT_CONFIG1,
+        bytearray() if version == 0 else bytearray([version]),
+        address,
+        handle_rx=handle_msg_rx,
+    )
 
 
 @main.command(SERVICE.SET_PORT_CONFIG.command)
@@ -2344,77 +2093,115 @@ async def set_port_config(
     pd: bool,
     address: str,
 ) -> None:
-    payload = bytearray()
-    set_ports = 0
-    for i, port in enumerate(PORTS):
-        if port not in ports:
-            payload.extend([0, 0, 0])
-            continue
-        set_ports |= 1 << i
-        config = PortConfig(
-            0,
-            tfcp,
-            pe,
-            qc2p0,
-            qc3p0,
-            qc3plus,
-            afc,
-            fcp,
-            hvscp,
-            lvscp,
-            sfcp,
-            apple,
-            samsung,
-            ufcs,
-            pd,
-        )
-        payload.extend(config.serialize())
-    for _ in range(8 - len(PORTS)):
-        payload.extend([0, 0, 0])
-    payload.insert(0, set_ports)
-    await send_cmd(
-        SERVICE.SET_PORT_CONFIG,
-        payload,
-        address,
-        handle_rx=check_success_rx,
+    await set_port_config_internal(
+        ports,
+        0,
+        tfcp,
+        pe,
+        qc2p0,
+        qc3p0,
+        qc3plus,
+        afc,
+        fcp,
+        hvscp,
+        lvscp,
+        sfcp,
+        apple,
+        samsung,
+        ufcs,
+        pd,
+        pdcompat=pd and False,
+        pd_lvpps=pd and True,
+        pdepr=pd and True,
+        pdrpi=pd and True,
+        pd_hvpps=pd and True,
+        address=address,
     )
 
 
 @main.command(SERVICE.GET_PORT_CONFIG.command)
 @click.option("-a", "--address", type=str, default=None)
 async def get_port_config(address: str) -> None:
-    def handle_msg_rx(_: BleakGATTCharacteristic, data: bytearray) -> None:
-        msg = Message.from_bytes(data)
-        if msg.header.size == 1:
-            # 去掉中间阶段的空成功响应
-            return
+    await get_port_config_internal(0, address)
 
-        status = msg.payload[0]
-        if status != 0:
-            click.secho(
-                "Failed to perform service {}. Status: {}".format(
-                    SERVICE(abs(msg.header.service)).name, status
-                ),
-                err=True,
-                fg="red",
-            )
-            return
-        offset = 1
-        size = 3
-        for i in range(5):
-            config = PortConfig.deserialize(msg.payload[offset : offset + size])
-            click.secho(
-                f"port {i}: {msg.payload[offset:offset+size].hex()}", fg="green"
-            )
-            click.secho(f"{config}", fg="green")
-            offset += size
 
-    await send_cmd(
-        SERVICE.GET_PORT_CONFIG,
-        bytearray(),
+@main.command(SERVICE.SET_PORT_CONFIG1.command)
+@click.argument("ports", type=click.Choice(PORTS, case_sensitive=False), nargs=-1)
+@click.option("--tfcp", is_flag=True, default=False)
+@click.option("--pe", is_flag=True, default=False)
+@click.option("--qc2p0", is_flag=True, default=False)
+@click.option("--qc3p0", is_flag=True, default=False)
+@click.option("--qc3plus", is_flag=True, default=False)
+@click.option("--afc", is_flag=True, default=False)
+@click.option("--fcp", is_flag=True, default=False)
+@click.option("--hvscp", is_flag=True, default=False)
+@click.option("--lvscp", is_flag=True, default=False)
+@click.option("--sfcp", is_flag=True, default=False)
+@click.option("--apple", is_flag=True, default=False)
+@click.option("--samsung", is_flag=True, default=False)
+@click.option("--ufcs", is_flag=True, default=False)
+@click.option("--pd", is_flag=True, default=False)
+@click.option("--pdcompat", is_flag=True, default=False)
+@click.option("--pdpps", is_flag=True, default=False)
+@click.option("--pdepr", is_flag=True, default=False)
+@click.option("--pdrpi", is_flag=True, default=False)
+@click.option("--pd_lvpps", is_flag=True, default=False)
+@click.option("--pd_hvpps", is_flag=True, default=False)
+@click.option("-a", "--address", type=str, default=None)
+async def set_port_config1(
+    ports: typing.Tuple[str],
+    tfcp: bool,
+    pe: bool,
+    qc2p0: bool,
+    qc3p0: bool,
+    qc3plus: bool,
+    afc: bool,
+    fcp: bool,
+    hvscp: bool,
+    lvscp: bool,
+    sfcp: bool,
+    apple: bool,
+    samsung: bool,
+    ufcs: bool,
+    pd: bool,
+    pdcompat: bool,
+    pdpps: bool,
+    pdepr: bool,
+    pdrpi: bool,
+    pd_lvpps: bool,
+    pd_hvpps: bool,
+    address: str,
+) -> None:
+    await set_port_config_internal(
+        ports,
+        1,
+        tfcp,
+        pe,
+        qc2p0,
+        qc3p0,
+        qc3plus,
+        afc,
+        fcp,
+        hvscp,
+        lvscp,
+        sfcp,
+        apple,
+        samsung,
+        ufcs,
+        pd,
+        pdcompat,
+        pd_lvpps,
+        pdepr,
+        pdrpi,
+        pd_hvpps,
         address,
-        handle_rx=handle_msg_rx,
     )
+
+
+@main.command(SERVICE.GET_PORT_CONFIG1.command)
+@click.option("-a", "--address", type=str, default=None)
+async def get_port_config1(address: str) -> None:
+    await get_port_config_internal(1, address)
 
 
 @dataclass
@@ -2536,7 +2323,7 @@ async def set_temporary_allocator(
     )
 
 
-@main.command("start-telemetry-stream")
+@main.command(SERVICE.START_TELEMETRY_STREAM.command)
 @click.option("-a", "--address", type=str, default=None)
 async def start_telemetry_stream(address: str) -> None:
     await send_cmd(
@@ -2547,7 +2334,7 @@ async def start_telemetry_stream(address: str) -> None:
     )
 
 
-@main.command("stop-telemetry-stream")
+@main.command(SERVICE.STOP_TELEMETRY_STREAM.command)
 @click.option("-a", "--address", type=str, default=None)
 async def stop_telemetry_stream(address: str) -> None:
     await send_cmd(
@@ -2558,7 +2345,7 @@ async def stop_telemetry_stream(address: str) -> None:
     )
 
 
-@main.command("get-device-info")
+@main.command(SERVICE.GET_DEVICE_INFO.command)
 @click.option("-a", "--address", type=str, default=None)
 async def get_device_info(address: str) -> None:
     def handle_msg_rx(_: BleakGATTCharacteristic, data: bytearray) -> None:

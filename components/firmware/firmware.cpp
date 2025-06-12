@@ -10,12 +10,14 @@
 #include "mbedtls/aes.h"
 #include "nvs_namespace.h"
 #include "sdkconfig.h"
+#include "utils.h"
 #include "version.h"
 
 #define FIRMWARE_DOWNLOAD_ENDPOINT CONFIG_FIRMWARE_DOWNLOAD_ENDPOINT
 #define FIRMWARE_CHECKSUM_DOWNLOAD_ENDPOINT \
   CONFIG_FIRMWARE_CHECKSUM_DOWNLOAD_ENDPOINT
 #define AES_BLOCK_SIZE 16
+#define AES_CHUNK_SIZE (16 * AES_BLOCK_SIZE)
 
 static const char *TAG = "Firmware";
 
@@ -62,6 +64,10 @@ esp_err_t aes_cbc_decrypt(const char *in, size_t in_len, char *out,
     ESP_LOGE(TAG, "Invalid argument");
     return ESP_ERR_INVALID_ARG;
   }
+  if (in_len % AES_BLOCK_SIZE != 0) {
+    ESP_LOGE(TAG, "Invalid input length");
+    return ESP_ERR_INVALID_SIZE;
+  }
   ESP_LOG_BUFFER_HEX_LEVEL(TAG, decrypt_ctx.aes_iv, 16, ESP_LOG_DEBUG);
 
   size_t block_size = *out_len;
@@ -69,13 +75,25 @@ esp_err_t aes_cbc_decrypt(const char *in, size_t in_len, char *out,
     ESP_LOGE(TAG, "Invalid size");
     return ESP_ERR_INVALID_SIZE;
   }
-  int ret = mbedtls_aes_crypt_cbc(
-      &decrypt_ctx.aes_ctx, MBEDTLS_AES_DECRYPT, in_len, decrypt_ctx.aes_iv,
-      (const unsigned char *)in, (unsigned char *)out);
-  if (ret != 0) {
-    ESP_LOGE(TAG, "mbedtls_aes_crypt_cbc: %d", ret);
-    return ESP_FAIL;
+
+  size_t chunk_size = AES_CHUNK_SIZE, offset = 0;
+  while (offset < in_len) {
+    if (offset + chunk_size > in_len) {
+      chunk_size = in_len - offset;
+    }
+
+    int ret = mbedtls_aes_crypt_cbc(&decrypt_ctx.aes_ctx, MBEDTLS_AES_DECRYPT,
+                                    chunk_size, decrypt_ctx.aes_iv,
+                                    (const unsigned char *)(in + offset),
+                                    (unsigned char *)(out + offset));
+    if (ret != 0) {
+      ESP_LOGE(TAG, "mbedtls_aes_crypt_cbc: %d", ret);
+      return ESP_FAIL;
+    }
+    offset += chunk_size;
+    DELAY_MS(1);  // yield to other tasks
   }
+
   if (is_last) {
     size_t padding_len = out[in_len - 1];
     if (padding_len > AES_BLOCK_SIZE) {
@@ -90,6 +108,12 @@ esp_err_t aes_cbc_decrypt(const char *in, size_t in_len, char *out,
 
 esp_err_t get_firmware_url(uint8_t type, const Version &version, char *url,
                            size_t url_len) {
+  url[0] = '\0';
+  return ESP_OK;
+}
+
+esp_err_t get_firmware_checksum_url(uint8_t type, const char *version,
+                                    char *url, size_t url_len) {
   url[0] = '\0';
   return ESP_OK;
 }

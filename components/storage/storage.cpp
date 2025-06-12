@@ -1,21 +1,22 @@
 #include "storage.h"
 
+#include <dirent.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/dirent.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <unistd.h>
 
+#include <cerrno>
 #include <cstdint>
-#include <fstream>
 
 #include "esp_check.h"
 #include "esp_err.h"
 #include "esp_littlefs.h"
 #include "esp_log.h"
 #include "ionbridge.h"
-#include "mbedtls/md5.h"
+#include "mbedtls/md5.h"  // IWYU pragma: keep
 #include "sdkconfig.h"
 
 #define FILE_SYSTEM_BASE_PATH CONFIG_FILE_SYSTEM_BASE_PATH
@@ -63,41 +64,49 @@ void Storage::GetTempFilePath(const char *filename, char *path) {
   strcat(path, filename);
 }
 
-std::streamsize Storage::GetFileSize(const char *path) {
-  std::ifstream file(path, std::ifstream::ate | std::ifstream::binary);
-  if (!(file && file.good())) {
-    // Return -1 or another suitable error value if the file fails to open
-    return -1;
+size_t Storage::GetFileSize(const char *path) {
+  FILE *file = fopen(path, "rb");
+  if (file == NULL) {
+    ESP_LOGE(TAG, "Failed to open file: %s", path);
+    return 0;
   }
-  // tellg() returns the current position of the 'get' pointer.
-  // Since we used std::ifstream::ate, the pointer is at the end of the file
-  // when opened
-  return file.tellg();
+
+  // Set position to end of file
+  if (fseek(file, 0, SEEK_END) != 0) {
+    fclose(file);
+    return 0;
+  }
+
+  // Get position which is the file size
+  size_t size = ftell(file);
+
+  fclose(file);
+  return size;
 }
 
 esp_err_t Storage::ReadFilePart(const char *path, uint8_t *part,
                                 size_t partSize, int offset) {
-  std::ifstream file(path, std::ios::binary);
-  if (!(file && file.good())) {
-    // Error handling if the file cannot be opened
+  FILE *file = fopen(path, "rb");
+  if (file == NULL) {
     ESP_LOGE(TAG, "%s not found", path);
     return ESP_FAIL;
   }
 
   // Seek to the specified location in the file
-  file.seekg(offset);
-  if (!file) {
-    // Error handling if the seek operation failed
+  if (fseek(file, offset, SEEK_SET) != 0) {
     ESP_LOGE(TAG, "Error seeking to %d", offset);
+    fclose(file);
     return ESP_FAIL;
   }
 
-  if (file.readsome(reinterpret_cast<char *>(part), partSize) != partSize) {
-    // Handle the error if the file does not contain enough data
+  // Read partSize bytes from the file
+  if (fread(part, 1, partSize, file) != partSize) {
     ESP_LOGE(TAG, "Error reading part of the file");
+    fclose(file);
     return ESP_FAIL;
   }
 
+  fclose(file);
   return ESP_OK;
 }
 
@@ -280,15 +289,15 @@ esp_err_t Storage::RemoveOldVersionFile(const char *currentVersion,
 }
 
 esp_err_t Storage::ComputeMD5(const char *path, char *hexdigest) {
-  std::ifstream file(path, std::ios::binary);
-  if (!(file && file.good())) {
+  FILE *file = fopen(path, "rb");
+  if (file == NULL) {
     ESP_LOGE(TAG, "Failed to open file: %s", path);
     return ESP_FAIL;
   }
 
 #define MD5_MAX_LEN 16
 
-  char buf[64];
+  unsigned char buf[64];
   uint8_t md5[MD5_MAX_LEN];
   mbedtls_md5_context ctx;
 
@@ -296,19 +305,20 @@ esp_err_t Storage::ComputeMD5(const char *path, char *hexdigest) {
   mbedtls_md5_starts(&ctx);
 
   size_t read;
-  do {
-    file.read(buf, sizeof(buf));
-    if (file.bad()) {
-      ESP_LOGE(TAG, "Error reading file: %s", path);
-      mbedtls_md5_free(&ctx);
-      return ESP_FAIL;
-    }
-    read = file.gcount();
-    mbedtls_md5_update(&ctx, (const unsigned char *)buf, read);
-  } while (read == sizeof(buf));
+  while ((read = fread(buf, 1, sizeof(buf), file)) > 0) {
+    mbedtls_md5_update(&ctx, buf, read);
+  }
+
+  if (ferror(file)) {
+    ESP_LOGE(TAG, "Error reading file: %s", path);
+    mbedtls_md5_free(&ctx);
+    fclose(file);
+    return ESP_FAIL;
+  }
 
   mbedtls_md5_finish(&ctx, md5);
   mbedtls_md5_free(&ctx);
+  fclose(file);
 
   for (int i = 0; i < MD5_MAX_LEN; i++) {
     sprintf(hexdigest + i * 2, "%02x", md5[i]);

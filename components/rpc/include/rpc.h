@@ -14,10 +14,6 @@
 #include "fake_sw3566_data_types.h"  // IWYU pragma: keep
 #endif
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 namespace rpc {
 namespace mcu {
 #if defined(CONFIG_MCU_MODEL_SW3566) || defined(CONFIG_MCU_MODEL_FAKE_SW3566)
@@ -33,7 +29,8 @@ esp_err_t boot(uint8_t mcu);
 esp_err_t bringup(uint8_t mcu, bool skip_upgrade = false);
 esp_err_t boot_all(bool *booted, uint8_t count, bool skip_upgrade = false);
 /* User application only */
-esp_err_t set_subscription(uint8_t mcu, Subscriptions subs);
+esp_err_t set_subscription(uint8_t mcu, Subscriptions &subs);
+esp_err_t set_system_flags(uint8_t mcu, SystemFlags *flags);
 #endif
 esp_err_t set_port_state(uint8_t mcu, bool shutdown);
 esp_err_t port_connect(uint8_t mcu);
@@ -56,21 +53,15 @@ esp_err_t read_adc_value(uint8_t *value);
 esp_err_t toggle_mcu_gpio(uint8_t mcu);
 esp_err_t set_adc_threshold(uint8_t low, uint8_t high);
 esp_err_t set_action_deadzone(uint8_t deadzone);
-};  // namespace fpga
-#endif
 
-namespace display {
 esp_err_t set_display_percentage(uint8_t percentage = 0);
 esp_err_t set_display_mode(uint8_t mode = 0);
 esp_err_t set_display_intensity(uint8_t intensity = 0);
 esp_err_t set_display_flip_mode(uint8_t mode = 0);
-};  // namespace display
+};  // namespace fpga
+#endif
 
 esp_err_t hard_reset_mcu(uint8_t mcu);
 };  // namespace rpc
-
-#ifdef __cplusplus
-}
-#endif
 
 #endif

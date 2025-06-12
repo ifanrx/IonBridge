@@ -1,0 +1,70 @@
+menu "Display Configuration"
+
+choice DISPLAY_DRIVER
+    prompt "Display Driver"
+    default DISPLAY_DRIVER_FPGA
+
+    config DISPLAY_DRIVER_FPGA
+        bool "FPGA"
+
+    config DISPLAY_DRIVER_LVGL
+        bool "LVGL"
+        select ENABLE_BLE_AND_MQTT_MUTUAL_EXCLUSION
+
+    config DISPLAY_DRIVER_NONE
+        bool "None"
+        help
+            Disable display driver. This is useful for testing purposes or if you don't need a display.
+            Note: This will disable all display-related features and functionality.
+endchoice
+
+config ANIMATION_FRAME_RATE
+    int "Animation frame rate"
+    default 6
+    range 1 30
+    help
+        Animation frame rate(frame per second)
+
+config ANIMATION_IMAGE_DIR
+    string "Animation Image Directory"
+    default "/littlefs/resources/images"
+    help
+        Directory where the boot animation images are stored.
+
+config BOOT_ANIMATION_PLAY_DURATION
+    int "Boot Animation Play Duration(ms)"
+    default 5000
+    help
+        Duration in milliseconds for boot animation.
+
+config IDLE_ANIMATION_PLAY_DURATION
+    int "Idle Animation Play Duration(ms)"
+    default 5000
+    help
+        Duration in milliseconds for idle animation.
+
+config DEVICE_INSERTED_DISPLAY_DURATION
+    int "Device Inserted Display Duration(ms)"
+    default 5000
+    help
+        Duration in milliseconds for device inserted display.
+
+config DEVICE_REMOVED_DISPLAY_DURATION
+    int "Device Removed Display Duration(ms)"
+    default 5000
+    help
+        Duration in milliseconds for device removed display.
+
+config DEVICE_POWER_DISPLAY_DURATION
+    int "Device Power Display Duration(ms)"
+    default 5000
+    help
+        Duration in milliseconds for device power display.
+
+config DISPLAY_LOCK_TIMEOUT_MS
+    int "Display Lock Timeout(ms)"
+    default 1000
+    help
+        Timeout in milliseconds for display lock.
+
+endmenu

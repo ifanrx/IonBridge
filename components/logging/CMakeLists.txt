@@ -8,6 +8,5 @@ idf_component_register(
   esp_ringbuf
   PRIV_REQUIRES
   esp_wifi
-  app
-  nvs_data
-  wifi)
+  machine_info
+  nvs_data)

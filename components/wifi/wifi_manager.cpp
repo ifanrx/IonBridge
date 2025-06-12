@@ -20,6 +20,8 @@
 #include "esp_wifi_types_generic.h"
 #include "ionbridge.h"
 #include "machine_info.h"
+#include "nvs.h"
+#include "utils.h"
 #include "sdkconfig.h"
 #include "wifi.h"
 
@@ -62,12 +64,18 @@ esp_err_t WiFiManager::Remove(const std::string& ssid) {
   return ESP_OK;
 }
 
-bool WiFiManager::GetWiFi(char* ssid, char* passwd) {
-  if (use_index_ >= found_count_) {
-    use_index_ = 0;
-    found_count_ = 0;
-  }
+esp_err_t WiFiManager::RemoveAll() {
+  ESP_RETURN_ON_ERROR(wifi_storage_.RemoveAll(), TAG,
+                      "Failed to remove all Wi-Fi entries");
+  Reset();
+  return ESP_OK;
+}
 
+bool WiFiManager::GetWiFi(char* ssid, char* passwd) {
+  if (found_count_ > 0 && use_index_ >= found_count_) {
+    use_index_ = 0;
+    return false;
+  }
   if (use_index_ == 0) {
     ESP_RETURN_FALSE_ON_ERROR(UpdateAvailableWiFi(aps_),
                               "Failed to update available Wi-Fi");
@@ -91,6 +99,7 @@ bool WiFiManager::GetWiFi(char* ssid, char* passwd) {
     use_index_++;
     return true;
   }
+  use_index_ = 0;
   return GetDefaultWiFiCredentials(ssid, passwd);
 }
 
@@ -160,16 +169,22 @@ bool WiFiManager::GetDefaultWiFiCredentials(char* ssid, char* passwd) {
 }
 
 bool WiFiManager::GetNextWiFiEntry(char* ssid, char* passwd) {
-  if (use_index_ >= found_count_) {
-    return false;
+  for (; use_index_ < found_count_; ++use_index_) {
+    const WiFiRSSI& wr = wifi_rssi_[use_index_];
+    WiFiEntry entry;
+    esp_err_t err = wifi_storage_.Get(wr.index, &entry);
+    if (err == ESP_OK) {
+      strlcpy(ssid, entry.ssid, WIFI_SSID_MAXIMUM);
+      strlcpy(passwd, entry.passwd, WIFI_PASSWD_MAXIMUM);
+      return true;
+    }
+    if (err == ESP_ERR_NVS_NOT_FOUND) {
+      continue;
+    }
+    ESP_RETURN_FALSE_ON_ERROR(err, "Failed to get Wi-Fi entry at index %d",
+                              wr.index);
   }
-  const WiFiRSSI& wr = wifi_rssi_[use_index_];
-  WiFiEntry entry;
-  ESP_RETURN_FALSE_ON_ERROR(wifi_storage_.Get(wr.index, &entry),
-                            "Failed to get Wi-Fi entry at index %d", wr.index);
-  strlcpy(ssid, entry.ssid, WIFI_SSID_MAXIMUM);
-  strlcpy(passwd, entry.passwd, WIFI_PASSWD_MAXIMUM);
-  return true;
+  return false;
 }
 
 esp_err_t WiFiManager::GetWiFiBySSID(const std::string& ssid,
@@ -298,7 +313,7 @@ esp_err_t WiFiManager::GetScanResult() {
 
   ssid_info_t* aps = aps_.data();
   std::map<std::string, int> country_count;
-  std::string most_common_country;
+  std::string most_common_country = WIFI_COUNTRY_UNKNOWN;
 
   uint16_t ap_count = 0;
   uint16_t scan_result_size = WIFI_SCAN_LIST_SIZE;
@@ -311,14 +326,12 @@ esp_err_t WiFiManager::GetScanResult() {
                     "esp_wifi_scan_get_ap_num");
 
   // Ensure that scan_result_size does not exceed the actual number of APs
-  if (scan_result_size > ap_count) {
-    scan_result_size = ap_count;
-  }
+  scan_result_size = std::min(scan_result_size, ap_count);
 
   ESP_GOTO_ON_ERROR(esp_wifi_scan_get_ap_records(&scan_result_size, ap_info),
                     CLEANUP, TAG, "esp_wifi_scan_get_ap_records");
 
-  ESP_LOGI(TAG, "AP scan completed: %u/%u/%u AP(s) found", scan_result_size,
+  ESP_LOGI(TAG, "AP scan completed: %u/%u/%u AP found", scan_result_size,
            WIFI_SCAN_LIST_SIZE, ap_count);
 
   // Sort APs by RSSI in descending order
@@ -337,9 +350,11 @@ esp_err_t WiFiManager::GetScanResult() {
     if (ssid_length == 0 || ssid_length >= WIFI_SSID_MAXIMUM) {
       continue;  // Skip invalid SSIDs
     }
+    std::string current_country_code(ap->country.cc, 2);
 
-    ESP_LOGI(TAG, "Found AP: SSID: %s, RSSI: %d, BSSID: %s, channel: %d",
-             ap->ssid, ap->rssi, FORMAT_MAC(ap->bssid), ap->primary);
+    ESP_LOGI(TAG, "Found AP: SSID: %s, RSSI: %d, BSSID: %s, Channel: %d, Country: %s",
+             ap->ssid, ap->rssi, FORMAT_MAC(ap->bssid), ap->primary,
+             current_country_code.c_str());
     std::string ssid_str((const char*)ap->ssid, ssid_length);
     if (unique_ssids.find(ssid_str) != unique_ssids.end()) {
       continue;  // Skip duplicate SSIDs
@@ -348,7 +363,7 @@ esp_err_t WiFiManager::GetScanResult() {
     unique_ssids.insert(ssid_str);
 
     // Populate the aps array with AP details
-    strncpy(aps[valid_ap_count].ssid, (const char*)ap->ssid, ssid_length);
+    strlcpy(aps[valid_ap_count].ssid, (const char*)ap->ssid, sizeof(aps[valid_ap_count].ssid));
     aps[valid_ap_count].size = ssid_length;
     aps[valid_ap_count].rssi = ap->rssi;
     aps[valid_ap_count].auth_mode = ap->authmode;
@@ -357,7 +372,11 @@ esp_err_t WiFiManager::GetScanResult() {
 #endif
     valid_ap_count++;
 
-    std::string current_country_code(ap->country.cc, 2);
+    // Country code is not set, skip this AP in country code count
+    if (ap->country.cc[0] == '\0') {
+      continue;
+    }
+
     country_count[current_country_code]++;
 
     // Determine the most common country code dynamically
@@ -367,9 +386,8 @@ esp_err_t WiFiManager::GetScanResult() {
     }
   }
 
-  ESP_LOGI(TAG, "Current country is %s", most_common_country.c_str());
-
   MachineInfo::GetInstance().SetCountryCode(most_common_country);
+  ESP_LOGI(TAG, "Current country is %s", MachineInfo::GetInstance().GetCountryCode().c_str());
 
 CLEANUP:
   // Clear the scan results

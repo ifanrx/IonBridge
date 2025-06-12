@@ -107,7 +107,7 @@ esp_err_t rpc::mcu::set_port_state(uint8_t mcu, bool shutdown) {
   return ESP_OK;
 }
 
-esp_err_t rpc::mcu::set_subscription(uint8_t mcu, Subscriptions subs) {
+esp_err_t rpc::mcu::set_subscription(uint8_t mcu, Subscriptions &subs) {
   return ESP_OK;
 }
 
@@ -231,16 +231,6 @@ esp_err_t rpc::mcu::get_port_details(uint8_t mcu, PortDetails *details) {
   return ESP_OK;
 }
 
-uint8_t generate_nonce() {
-  // Get a 32-bit random number from the hardware RNG
-  uint32_t random_value = esp_random();
-
-  // Extract a uint8_t from the 32-bit random number
-  uint8_t random_uint8 = (uint8_t)(random_value & 0xFF);
-
-  return random_uint8;
-}
-
 esp_err_t rpc::mcu::set_power_features(uint8_t mcu, PowerFeatures features) {
   return ESP_OK;
 }
@@ -298,6 +288,23 @@ esp_err_t rpc::mcu::set_max_power_budget(uint8_t mcu, uint8_t budget,
 esp_err_t rpc::mcu::get_max_power_budget(uint8_t mcu, uint8_t *budget) {
   if (budget != nullptr) {
     *budget = port_power_cap[mcu] / 1e3;
+  }
+  return ESP_OK;
+}
+
+esp_err_t rpc::mcu::set_system_flags(uint8_t mcu, SystemFlags *flags) {
+  if (flags->commit == 0x55) {
+    return ESP_OK;
+  }
+  *flags = {
+      .commit = 0,
+      .unused0 = true,
+      .port_type = 1,
+      .cable_compensation = 1,
+      .unused = 0,
+  };
+  if (mcu == 0) {
+    flags->port_type = 0;
   }
   return ESP_OK;
 }

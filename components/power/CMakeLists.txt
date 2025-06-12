@@ -6,12 +6,13 @@ idf_component_register(
   "include"
   REQUIRES
   port
-  rpc
-  uart
   PRIV_REQUIRES
-  app
-  controller
-  mqtt_app
+  chip_data_types
+  esp_timer
+  machine_info
   nvs_data
-  task
   utils)
+set_property(
+  TARGET ${COMPONENT_LIB}
+  APPEND
+  PROPERTY LINK_INTERFACE_MULTIPLICITY 3)

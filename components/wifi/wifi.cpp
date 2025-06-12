@@ -30,8 +30,8 @@
 #include "freertos/idf_additions.h"
 #include "freertos/projdefs.h"
 #include "ionbridge.h"
+#include "lwip/netdb.h"
 #include "machine_info.h"
-#include "mqtt_app.h"
 #include "sdkconfig.h"
 #include "syslog.h"
 #include "utils.h"
@@ -81,7 +81,6 @@ static void ip_event_handler(void *arg, esp_event_base_t event_base,
       local_ip6 = event->ip6_info.ip;
       const char *ipv6 = ip6addr_ntoa((ip6_addr_t *)&event->ip6_info.ip);
       ESP_LOGI(TAG, "Got IPv6: %s", ipv6);
-      MQTTClient::GetInstance()->Start();
       break;
     }
 #endif
@@ -100,7 +99,7 @@ static void ip_event_handler(void *arg, esp_event_base_t event_base,
       ESP_LOGE(TAG, "IP address lost");
       ble_adv_delay_start();
       SyslogClient::GetInstance().Cleanup();
-      wifi_controller.Notify(WiFiEventType::STOP_WEB_SERVER);
+      wifi_controller.Notify(WiFiEventType::LOST_IP);
       break;
     default:
       ESP_LOGE(TAG, "Unhandled IP_EVENT: %" PRIu32, event_id);
@@ -391,9 +390,6 @@ void WiFiController::SetState(WiFiStateType type) {
     case WiFiStateType::CHECKING_CONN:
       SetState(&WiFiCheckingConnState::GetInstance());
       break;
-    case WiFiStateType::STARTING_MQTT:
-      SetState(&WiFiStartingMQTTState::GetInstance());
-      break;
     case WiFiStateType::IDLE:
       SetState(&WiFiIdleState::GetInstance());
       break;
@@ -437,8 +433,15 @@ void WiFiController::Loop() {
       event = (WiFiEventType)val;
       ESP_LOGD(TAG, "Receive WiFi event: %s", WiFiEventTypeToString(event));
     }
+    if (event == WiFiEventType::STOP) {
+      ESP_LOGI(TAG, "Stopping the Wi-Fi task");
+      break;
+    }
     state_->Handle(ctx_, event);
   }
+  state_->Exiting(ctx_);
+  wifi_close();
+  vTaskDelete(NULL);
 }
 
 void WiFiController::SetState(WiFiState *state) {
@@ -465,15 +468,14 @@ bool WiFiController::SwitchWiFi(const char *ssid, const char *passwd) {
     return false;
   }
   wifi_config_t &wifi_config = ctx_->GetWiFiConfig();
-  char *connect_wifi_ssid = reinterpret_cast<char *>(wifi_config.sta.ssid);
-  size_t connect_ssid_length = strlen(connect_wifi_ssid);
-  if (IsConnectingOrConnected() && connect_ssid_length > 0 &&
-      strncmp(connect_wifi_ssid, ssid, connect_ssid_length) == 0) {
+  std::string_view current_ssid((char *)wifi_config.sta.ssid);
+  if (IsConnectingOrConnected() && !current_ssid.empty() &&
+      current_ssid == ssid) {
     ESP_LOGI(TAG, "WiFi %s is connecting or connected", ssid);
     return true;
   }
 
-  if (ssid != NULL && passwd != NULL) {
+  if (ssid && passwd) {
     ESP_LOGI(TAG, "Using the provided SSID and password");
     ctx_->Reset();
     ctx_->SetSwitchingWiFi(true);
@@ -489,16 +491,16 @@ void WiFiController::OnConnected(void *event_data) {
 
 void WiFiController::OnDisconnected(void *event_data) {
   WiFiManager::GetInstance().OnDisconnected();
-  MQTTClient::GetInstance()->Stop();
   SyslogClient::GetInstance().Cleanup();
   wifi_event_sta_disconnected_t *disconnected =
       (wifi_event_sta_disconnected_t *)event_data;
   ESP_LOGE(TAG, "Disconnected from %s (%s), RSSI: %d, reason: %d",
            disconnected->ssid, FORMAT_MAC(disconnected->bssid),
            disconnected->rssi, disconnected->reason);
-  if (DeviceController::GetInstance()->is_upgrading()) {
+  DeviceController &controller = DeviceController::GetInstance();
+  if (controller.is_upgrading()) {
     ESP_LOGW(TAG, "Wi-Fi disconnected while upgrading, rebooting");
-    DeviceController::GetInstance()->reboot_after();
+    controller.reboot_after();
   }
   ctx_->SetDisconnectdSSID(reinterpret_cast<const char *>(disconnected->ssid));
   switch (disconnected->reason) {
@@ -541,4 +543,29 @@ RECONNECT_NEXT_WIFI:
   SetReconnect(false, true);
   Notify(WiFiEventType::DISCONNECTED);
 }
+
+bool WiFiController::ResolveAddress(const char *hostname) {
+  // Initialize addrinfo hints using C++ initializer list for clarity
+  struct addrinfo hints = {
+      .ai_family = AF_INET,
+      .ai_socktype = SOCK_STREAM,
+  };
+  struct addrinfo *res = nullptr;
+
+  // Perform DNS lookup
+  int err = getaddrinfo(hostname, nullptr, &hints, &res);
+
+  if (err != 0 || res == nullptr) {
+    ESP_LOGE(TAG, "DNS lookup failed for %s: %d", hostname, err);
+    if (res) {
+      freeaddrinfo(res);
+    }
+    return false;
+  }
+
+  // DNS lookup succeeded
+  freeaddrinfo(res);  // Free the allocated memory
+  return true;
+}
+
 WiFiController wifi_controller;

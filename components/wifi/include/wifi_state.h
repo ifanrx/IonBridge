@@ -6,6 +6,7 @@
 #include <string>
 
 #include "esp_wifi_types_generic.h"
+#include "freertos/idf_additions.h"
 #include "singleton.h"
 
 #define WIFI_SSID_MAXIMUM 32
@@ -18,11 +19,11 @@ enum class WiFiEventType {
   CONNECTED,
   DISCONNECTED,
   CHECKING_CONN,
-  MQTT_CONNECTED,
-  MQTT_DISCONNECTED,
   ABORT,
   START_WEB_SERVER,
   STOP_WEB_SERVER,
+  LOST_IP,
+  STOP,
 };
 
 const char *WiFiEventTypeToString(WiFiEventType event);
@@ -33,7 +34,6 @@ enum class WiFiStateType {
   CONNECTING,
   CONNECTED,
   CHECKING_CONN,
-  STARTING_MQTT,
   IDLE,
   DISCONNECTED,
   RECONNECTING,
@@ -56,6 +56,11 @@ class WiFiStateContext : public Singleton<WiFiStateContext> {
   char disconnected_ssid_[WIFI_SSID_MAXIMUM];
 
  public:
+  ~WiFiStateContext() {
+    if (wifi_config_) {
+      wifi_config_.reset();
+    }
+  }
   void Initialize();
   uint16_t connection_start_time_ = 0;
 
@@ -111,8 +116,6 @@ class WiFiState {
         return "CONNECTED";
       case WiFiStateType::CHECKING_CONN:
         return "CHECKING_CONN";
-      case WiFiStateType::STARTING_MQTT:
-        return "STARTING_MQTT";
       case WiFiStateType::IDLE:
         return "IDLE";
       case WiFiStateType::RECONNECTING:
@@ -196,35 +199,33 @@ class WiFiConnectedState : public WiFiState,
 class WiFiCheckingConnState : public WiFiState,
                               public Singleton<WiFiCheckingConnState> {
  public:
+  void Entering(WiFiStateContext *ctx) override;
+  void Exiting(WiFiStateContext *ctx) override;
   void Handle(WiFiStateContext *ctx, WiFiEventType event) override;
+
+  enum class CheckConnState {
+    EXIT = 0,
+    CHECKING,
+  };
 
  private:
   // Allow Singleton to access the constructor
   friend class Singleton<WiFiCheckingConnState>;
   // Private constructor to prevent external instantiation
   WiFiCheckingConnState() : WiFiState(WiFiStateType::CHECKING_CONN) {}
-};
 
-class WiFiStartingMQTTState : public WiFiState,
-                              public Singleton<WiFiStartingMQTTState> {
-  bool client_started_ = false;
+  TaskHandle_t task_handle_ = nullptr;
 
- public:
-  void Entering(WiFiStateContext *ctx) override;
-  void Handle(WiFiStateContext *ctx, WiFiEventType event) override;
-
- private:
-  // Allow Singleton to access the constructor
-  friend class Singleton<WiFiStartingMQTTState>;
-  // Private constructor to prevent external instantiation
-  WiFiStartingMQTTState() : WiFiState(WiFiStateType::STARTING_MQTT) {}
+  void StartCheckConnTask();
+  void StopCheckConnTask();
+  void ExecuteCheckConnTask();
 };
 
 class WiFiIdleState : public WiFiState, public Singleton<WiFiIdleState> {
  public:
   void Entering(WiFiStateContext *ctx) override;
-  void Handle(WiFiStateContext *ctx, WiFiEventType event) override;
   void Exiting(WiFiStateContext *ctx) override;
+  void Handle(WiFiStateContext *ctx, WiFiEventType event) override;
 
  private:
   // Allow Singleton to access the constructor
@@ -234,6 +235,8 @@ class WiFiIdleState : public WiFiState, public Singleton<WiFiIdleState> {
   void LogRSSI();
 
   int64_t next_log_at_ = 0;
+  bool client_started_ = false;
+  bool temporary_exiting_ = false;
 };
 
 class WiFiDisconnectedState : public WiFiState,
@@ -282,6 +285,7 @@ class WiFiWaitingForNextState : public WiFiState,
   void UpdateConnectAt();
 
   int64_t connect_at_;
+  bool ssid_available_;
 };
 
 class WiFiScanningState : public WiFiState,
@@ -296,7 +300,7 @@ class WiFiScanningState : public WiFiState,
   // Private constructor to prevent external instantiation
   WiFiScanningState() : WiFiState(WiFiStateType::SCANNING) {}
 
-  bool done_ = false;
+  bool scan_failed_ = false;
 };
 
 class WiFiConnectionAbortState : public WiFiState,
@@ -331,5 +335,9 @@ class WiFiWaitingForDefaultState
 
   int64_t until_at_ = 0;
 };
+
+#ifdef IONBRIDGE_WIFI_HOST_TEST
+void set_network_accessible(bool accessible);
+#endif
 
 #endif /* H_WIFI_STATE_ */

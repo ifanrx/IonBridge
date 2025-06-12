@@ -4,9 +4,14 @@ idf_component_register(
   ${SRCS_FILES}
   INCLUDE_DIRS
   "include"
+  REQUIRES
+  esp_nimble_cpp
   PRIV_REQUIRES
-  animation
   app
+  display
+  esp_timer
+  machine_info
   nvs_data
+  service
   utils
   wifi)

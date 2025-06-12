@@ -1,5 +1,7 @@
 #include "message.h"
 
+#include <sys/param.h>
+
 #include "app.h"
 #include "ble.h"
 #include "esp_log.h"
@@ -14,7 +16,12 @@ MessageHandler::MessageHandler() {
   }
 }
 
-MessageHandler::~MessageHandler() { delete[] handlers_; }
+MessageHandler::~MessageHandler() {
+  for (size_t i = 0; i < MAX_CONCURRENT_CONN; i++) {
+    delete[] handlers_[i].data;
+  }
+  delete[] handlers_;
+}
 
 void MessageHandler::setPeerMTU(uint16_t peerMTU) { peerMTU_ = peerMTU; }
 
@@ -135,13 +142,17 @@ void MessageHandler::sendResponse(Message &msg, const uint8_t *data,
   size_t sequence = 0;
   uint8_t fragFlags = dataLength > chunkSize ? FRAG_FIRST : FRAG_NONE;
 
+#ifndef CONFIG_IDF_TARGET_LINUX
   ESP_LOGD(TAG, "Sending data: %d bytes", dataLength);
+#endif
   while (offset < dataLength) {
     size_t currChunkSize = MIN(chunkSize, dataLength - offset);
     uint8_t flags = IS_LAST_FRAG(fragFlags) ? tcpFlag : BLE_ACK;
     flags |= (fragFlags << 3);
+#ifndef CONFIG_IDF_TARGET_LINUX
     ESP_LOGD(TAG, "Sending chunk: %d bytes, flags: 0x%02x, offset: %d",
              currChunkSize, flags, offset);
+#endif
     messages.emplace_back(msg.getVersion(), msg.getID(), -msg.getService(),
                           sequence, flags, data + offset, currChunkSize);
 

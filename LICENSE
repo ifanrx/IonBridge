@@ -7,21 +7,17 @@ intended purpose.
 
 1. CERN Open Hardware Licence Version 2 - Strongly Reciprocal (Non-Commercial Use)
 
-For non-commercial purposes (as defined in 1.1), this project is licensed under
-the CERN Open Hardware Licence Version 2 - Strongly Reciprocal ("CERN OHL v2").
-This license ensures that any modifications or derived works are shared under
-the same terms, promoting collaboration and openness within the community.
+For non-commercial purposes, this project is licensed under the CERN Open
+Hardware Licence Version 2 - Strongly Reciprocal ("CERN OHL v2"). This license
+ensures that any modifications or derived works are shared under the same terms,
+promoting collaboration and openness within the community.
 
 You can view the full text of the CERN OHL v2 at cern_ohl_s_v2.txt
 
-1.1 Exclusions
+Additional Condition:
 
-The CERN OHL v2 does not apply to:
-
-*  Projects that involve manufacturing more than 100 units of hardware for a
-   specific model (or similar models), or 1000 units for the same vendor in
-   aggregation.
-*  Projects intended for for-profit purposes.
+The CERN OHL v2 does **not** apply to any project that results in the
+construction of more than 100 units of hardware or any for-profit projects.
 
 2. Custom License (Commercial Use)
 
@@ -38,10 +34,8 @@ https://www.ifanr.com
 Choosing a License
 ------------------
 
-- Non-Commercial Use: Select the CERN OHL v2 to comply with open hardware
-  principles and contribute back to the community.
-- Commercial Use: Obtain the Custom License to integrate the project into
-  your business offerings.
+- Non-Commercial Use: Select the CERN OHL v2 to comply with open hardware principles and contribute back to the community.
+- Commercial Use: Obtain the Custom License to integrate the project into your business offerings.
 
 By using this project, you agree to abide by the terms of the selected license.
 

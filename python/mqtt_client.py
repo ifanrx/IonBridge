@@ -4,24 +4,37 @@ import ctypes
 import dataclasses
 import enum
 import json
-import random
+import queue
+import os
 import re
 import struct
 import threading
 import time
 import typing
 
+import asyncio
 import asyncclick as click
 import paho.mqtt.client as mqtt
+import utils
 
-from ble_tester import FastChargingProtocol
+from data_types.port import (
+    ClientPDStatus,
+    FastChargingProtocol,
+    PortConfig,
+    PORTS,
+    PortConfigInternal,
+    PortType,
+)
+from data_types.service import SERVICE
+from data_types.wifi import WiFiAuthMode, WiFiStateType
+from usb_pd import pcap
 
-random.seed(time.time())
+msg_id = 0
 
-PORTS: list[str] = ["A", "C1", "C2", "C3", "C4"]
-
-message_event = threading.Event()
-receive_messages: typing.List["TelemetryMessage"] = []
+# Create queues for requests and responses
+request_queue = queue.Queue()
+response_queue = queue.Queue()
+ignore_push_msg: bool = True
 
 
 class ManageFeature(enum.IntEnum):
@@ -34,32 +47,6 @@ class ManageAction(enum.IntEnum):
     RESET = 2
 
 
-class WifiAuthMode(enum.IntEnum):
-    WIFI_AUTH_OPEN = 0  # authenticate mode : open
-    WIFI_AUTH_WEP = 1  # authenticate mode : WEP
-    WIFI_AUTH_WPA_PSK = 2  # authenticate mode : WPA_PSK
-    WIFI_AUTH_WPA2_PSK = 3  # authenticate mode : WPA2_PSK
-    WIFI_AUTH_WPA_WPA2_PSK = 4  # authenticate mode : WPA_WPA2_PSK
-    WIFI_AUTH_ENTERPRISE = 5  # authenticate mode : WiFi EAP security
-    WIFI_AUTH_WPA2_ENTERPRISE = (
-        5  # authenticate mode : WiFi EAP security (same as WIFI_AUTH_ENTERPRISE)
-    )
-    WIFI_AUTH_WPA3_PSK = 6  # authenticate mode : WPA3_PSK
-    WIFI_AUTH_WPA2_WPA3_PSK = 7  # authenticate mode : WPA2_WPA3_PSK
-    WIFI_AUTH_WAPI_PSK = 8  # authenticate mode : WAPI_PSK
-    WIFI_AUTH_OWE = 9  # authenticate mode : OWE
-    WIFI_AUTH_WPA3_ENT_192 = 10  # authenticate mode : WPA3_ENT_SUITE_B_192_BIT
-    WIFI_AUTH_MAX = 11  # Max value for authentication modes
-
-    @classmethod
-    def get_name_from_value(cls, value: int) -> str:
-        """Return the name of the enum corresponding to the given value."""
-        try:
-            return cls(value).name
-        except ValueError:
-            return f"Unknown: {value}"
-
-
 @dataclasses.dataclass
 class Message:
     command: int
@@ -67,7 +54,10 @@ class Message:
     msg_id: int = 0
 
     def __post_init__(self):
-        self.msg_id = random.randint(0, 65535)
+        global msg_id
+        self.msg_id = msg_id
+        msg_id += 1
+        msg_id &= 0xFFFF
 
     def serialize(self) -> bytes | bytearray:
         length = len(self.payload)
@@ -85,10 +75,6 @@ class TelemetryMessage:
     status: int
     payload: bytes = b""
 
-    def __post_init__(self):
-        if not hasattr(self, "msg_id") or self.msg_id == 0:
-            self.msg_id = random.randint(0, 65535)
-
     @classmethod
     def deserialize(cls, data: bytes):
         # Unpack the fixed part of the message (command, msg_id, status)
@@ -102,7 +88,7 @@ class TelemetryMessage:
         return cls(command, msg_id, status, payload)
 
     def __str__(self):
-        return f"Command: {Service(self.command).name}, Msg ID: {self.msg_id}, Status: {self.status}, Payload: {self.payload.hex()}"
+        return f"Command: {SERVICE(self.command).name}, Msg ID: {self.msg_id}, Status: {self.status}, Payload: {self.payload.hex()}"
 
 
 class PowerStatistics(ctypes.LittleEndianStructure):
@@ -130,134 +116,6 @@ class PowerStatistics(ctypes.LittleEndianStructure):
 AllPowerStatistics = PowerStatistics * 5
 
 
-class Service(enum.IntEnum):
-    GET_DEVICE_PASSWORD = 0x05
-    MANAGE_FPGA_CONFIG = 0x08  # 管理 FPGA 配置
-    MANAGE_POWER_ALLOCATOR_ENABLED = 0x09  # 管理功率分配器是否启用
-    MANAGE_POWER_CONFIG = 0x0A  # 管理功率配置
-    MANAGE_FEATURE_TOGGLE = 0x0B  # 管理 feature toggle
-
-    REBOOT_DEVICE = 0x11  # 重启设备
-    RESET_DEVICE = 0x12  # 重置设备
-    GET_ESP32_VERSION = 0x15
-    GET_SW3566_VERSION = 0x16
-    GET_FPGA_VERSION = 0x17
-    SWITCH_DEVICE = 0x1A
-    GET_DEVICE_MODEL = 0x1C
-    TRIGGER_ESP32_OTA = 0x21
-    CONFIRM_ESP32_OTA = 0x23
-    SCAN_WIFI = 0x30  # 扫描WIFI
-    SET_WIFI_SSID_AND_PASSWORD = 0x36  # 设置WIFI SSID和密码
-    GET_POWER_SUPPLY_STATUS = 0x42  # 获取端口供电状态（是否供电）
-    GET_PORT_PD_STATUS = 0x49
-    GET_ALL_POWER_STATISTICS = 0x4A
-    SET_DISPLAY_STATE = 0x77
-    GET_DISPLAY_STATE = 0x78
-
-    # MQTT only
-    START_TELEMETRY_STREAM = 0x90
-    STOP_TELEMETRY_STREAM = 0x91
-    SET_BLE_STATE = 0x98
-    SET_SYSLOG_STATE = 0x99
-    SET_SYSTEM_TIME = 0x9A  # 设置系统时间
-    START_OTA = 0x9C
-
-    # 内部信息 0x0000 - 0x0110
-    PING = 0x0100
-
-    # 基础设备信息 0x0110 - 0x0120
-    DEVICE_BOOT_INFO = 0x0110
-    DEVICE_MEMORY_INFO = 0x0111
-    DEVICE_SYSTEM_STATE = 0x0112
-
-    # 功率相关信息
-    POWER_HISTORICAL_DATA = 0x0130
-    POWER_CONSUMPTION_DATA = 0x0131  # 用电统计
-
-    # OTA
-    ESP32_UPGRADE_DATA = 0x0140
-    OTA_CONFIRM_DATA = 0x0143
-
-    # WIFI
-    WIFI_STATS_DATA = 0x0150
-
-    # ALERT
-    PD_CHARGING_ALERT = 0x0162
-
-
-class ClientPDStatus(ctypes.LittleEndianStructure):
-    _pack_ = 4
-    _fields_ = [
-        ("battery_vid", ctypes.c_uint16),
-        ("battery_pid", ctypes.c_uint16),  # 4 bytes
-        ("battery_design_capacity", ctypes.c_uint16),
-        ("battery_last_full_charge_capacity", ctypes.c_uint16),  # 8 bytes
-        ("battery_present_capacity", ctypes.c_uint16),
-        ("battery_invalid", ctypes.c_uint8, 1),
-        ("battery_present", ctypes.c_uint8, 1),
-        ("battery_status", ctypes.c_uint8, 2),
-        ("cable_is_active", ctypes.c_uint8, 1),
-        ("cable_termination_type", ctypes.c_uint8, 1),
-        ("cable_epr_mode_capable", ctypes.c_uint8, 1),
-        ("cable_active_phy_type", ctypes.c_uint8, 1),
-        ("cable_latency", ctypes.c_uint8, 4),
-        ("cable_max_vbus_voltage", ctypes.c_uint8, 2),
-        ("cable_max_vbus_current", ctypes.c_uint8, 2),
-        ("cable_usb_highest_speed", ctypes.c_uint8, 3),
-        ("cable_active_element", ctypes.c_uint8, 1),
-        ("cable_active_usb4", ctypes.c_uint8, 1),
-        ("cable_active_usb2p0", ctypes.c_uint8, 1),
-        ("cable_active_usb3p2", ctypes.c_uint8, 1),
-        ("cable_active_usb_lanes", ctypes.c_uint8, 1),
-        ("cable_active_optically_isolated", ctypes.c_uint8, 1),
-        ("cable_active_usb4_asym", ctypes.c_uint8, 1),
-        ("cable_active_usb_gen", ctypes.c_uint8, 1),
-        ("request_epr_mode_capable", ctypes.c_uint8, 1),
-        ("request_pdo_id", ctypes.c_uint8, 4),
-        ("request_usb_communications_capable", ctypes.c_uint8, 1),
-        ("request_capability_mismatch", ctypes.c_uint8, 1),
-        ("sink_capabilities", ctypes.c_uint8, 4),
-        ("sink_cap_pdo_count", ctypes.c_uint8, 2),
-        ("status_temperature", ctypes.c_uint8),
-        ("cable_vid", ctypes.c_uint16),
-        ("cable_pid", ctypes.c_uint16),
-        ("manufacturer_vid", ctypes.c_uint16),
-        ("manufacturer_pid", ctypes.c_uint16),
-        ("sink_minimum_pdp", ctypes.c_uint8),
-        ("sink_operational_pdp", ctypes.c_uint8),
-        ("sink_maximum_pdp", ctypes.c_uint8),
-        ("unused0", ctypes.c_uint8),
-        ("operating_current", ctypes.c_uint16, 10),
-        ("pd_revision", ctypes.c_uint8, 2),
-        ("unused1", ctypes.c_uint8, 4),
-        ("operating_voltage", ctypes.c_uint16, 15),
-        ("request_ppsavs", ctypes.c_uint16, 1),
-        ("cable_xid", ctypes.c_uint32),
-        ("bcd_device", ctypes.c_uint16),
-        ("unused2", ctypes.c_uint16),
-        ("unused3", ctypes.c_uint32 * 14),
-    ]
-
-    @classmethod
-    def from_bytes(cls, data: bytes | bytearray):
-        """Convert incoming data bytes to a ClientPDStatus instance."""
-        expected_size = ctypes.sizeof(cls)
-        actual_size = len(data)
-        if actual_size != expected_size:
-            raise ValueError(f"Expected {expected_size} bytes, got {actual_size}")
-        return cls.from_buffer_copy(data)
-
-    def __str__(self):
-        """Human-readable string representation of the structure."""
-        fields_str = []
-        for field_name, field_type, *rest in self._fields_:
-            value = getattr(self, field_name)
-            if isinstance(field_type, ctypes.Array):
-                value = list(value)
-            fields_str.append(f"  {field_name}={value}")
-        return "ClientPDStatus(\n" + ",\n".join(fields_str) + "\n)"
-
-
 def on_connect(client, userdata, flags, rc, properties=None):
     print("Connected with result code " + str(rc))
 
@@ -267,201 +125,19 @@ def on_subscribe(client, userdata, mid, reasonCodes, properties):
 
 
 def on_message(client, userdata, msg):
-    print(f"Received message from {msg.topic}, length: {len(msg.payload)}")
     try:
         message = TelemetryMessage.deserialize(msg.payload)
+        if handle_push_message(message):
+            return
+        response_queue.put(message)
     except Exception:
         print(msg.payload)
-        return
-    if message.status != 0:
-        print("Error: ", message)
-        return
 
-    global receive_messages
-    receive_messages.append(message)
-    message_event.set()
-    match message.command:
-        case Service.GET_ESP32_VERSION:
-            print(
-                f"Get ESP32 version: {message.payload[0]}.{message.payload[1]}.{message.payload[2]}"
-            )
-        case Service.GET_SW3566_VERSION:
-            print(
-                f"Get SW3566 version: {message.payload[0]}.{message.payload[1]}.{message.payload[2]}"
-            )
-        case Service.GET_FPGA_VERSION:
-            print(
-                f"Get FPGA version: {message.payload[0]}.{message.payload[1]}.{message.payload[2]}"
-            )
-        case Service.TRIGGER_ESP32_OTA:
-            print("Trigger ESP32 OTA")
-        case Service.CONFIRM_ESP32_OTA:
-            print("Confirm ESP32 OTA")
-        case Service.OTA_CONFIRM_DATA:
-            hash_length = 32
-            print(
-                f"OTA Confirm Data, hash: {message.payload[:hash_length].hex()}, esp32 version: {message.payload[hash_length]}.{message.payload[hash_length+1]}.{message.payload[hash_length+2]}"
-            )
-        case Service.GET_DEVICE_PASSWORD:
-            print(
-                f"Get password: {message.payload[0]}{message.payload[1]}{message.payload[2]}{message.payload[3]}"
-            )
-        case Service.MANAGE_POWER_ALLOCATOR_ENABLED:
-            if len(message.payload) != 1:
-                return
-            print(f"Get power allocator enabled: {bool(message.payload[0])}")
-        case Service.MANAGE_FPGA_CONFIG:
-            if len(message.payload) != 3:
-                return
-            adc_threshold_low = message.payload[0]
-            adc_threshold_high = message.payload[1]
-            action_deadzone = message.payload[2]
-            print(
-                f"Get FPGA config: adc_threshold_low: {adc_threshold_low}, adc_threshold_high: {adc_threshold_high}, action_deadzone: {action_deadzone}"
-            )
-        case Service.MANAGE_POWER_CONFIG:
-            if message.status != 0:
-                print("Failed to manage power config")
-                return
-            if len(message.payload) == 0:
-                return
-            if len(message.payload) != 17:
-                print(f"Invalid power config length: {len(message.payload)}")
-                return
-            config = PowerConfig.deserialize(message.payload)
-            print(
-                f"Get power config: {json.dumps(dataclasses.asdict(config), indent=4)}"
-            )
-        case Service.GET_ALL_POWER_STATISTICS:
-            if len(message.payload) != ctypes.sizeof(AllPowerStatistics):
-                print(f"Invalid power statistics data length: {len(message.payload)}")
-            all_stats = AllPowerStatistics.from_buffer_copy(message.payload)
-            for port, stat in enumerate(all_stats):
-                print(f"[{port}] {stat}")
-        case Service.GET_POWER_SUPPLY_STATUS:
-            print(f"Get power supply status: {message.payload.hex()}")
-        case Service.MANAGE_FEATURE_TOGGLE:
-            if message.status != 0:
-                print("Failed to manage feature toggle")
-                return
-            feature = message.payload[0]
-            action = message.payload[1]
-            if action == ManageAction.GET:
-                enabled = bool(message.payload[2])
-                print(f"{ManageFeature(feature).name}: {enabled}")
-        case Service.SCAN_WIFI:
-            ssid_count = struct.unpack_from("B", message.payload, 0)[0]
-            offset = 1
-            ssid_list = []
-            for _ in range(ssid_count):
-                ssid_length = struct.unpack_from("B", message.payload, offset)[0]
-                offset += 1
-                ssid = struct.unpack_from(f"{ssid_length}s", message.payload, offset)[0]
-                offset += ssid_length
-                rssi = struct.unpack_from("b", message.payload, offset)[0]
-                offset += 1
-                auth_mode = struct.unpack_from("B", message.payload, offset)[0]
-                offset += 1
-                stored = struct.unpack_from("B", message.payload, offset)[0]
-                offset += 1
 
-                ssid_list.append(
-                    {
-                        "ssid_length": ssid_length,
-                        "ssid": ssid.decode("utf-8"),
-                        "rssi": rssi,
-                        "auth_mode": WifiAuthMode.get_name_from_value(auth_mode),
-                        "stored": bool(stored),
-                    },
-                )
-
-            for item in ssid_list:
-                click.secho(
-                    f"SSID: {item['ssid']} - RSSI: {item['rssi']} - Auth: {item['auth_mode']} - Stored: {item['stored']}",
-                    fg="green",
-                )
-        case Service.GET_DEVICE_MODEL:
-            model = message.payload.decode("utf-8")
-            click.secho(f"Device model: {model}", fg="green")
-        case Service.WIFI_STATS_DATA:
-            fmt = "<HHbBHHHHHII"
-            fields = struct.unpack_from(fmt, message.payload)
-            click.secho(f"associationCount: {fields[0]}", fg="green")
-            click.secho(f"disassociationCount: {fields[1]}", fg="green")
-            click.secho(f"rssi: {fields[2]}", fg="green")
-            click.secho(f"channel: {fields[3]}", fg="green")
-            click.secho(f"wifiConnectionTime: {fields[4]}", fg="green")
-            click.secho(f"mqttConnectionTime: {fields[5]}", fg="green")
-            click.secho(f"connectivityFailureCount: {fields[6]}", fg="green")
-            click.secho(f"dnsResolutionFailureCount: {fields[7]}", fg="green")
-            click.secho(f"mqttConnectionCount: {fields[8]}", fg="green")
-            click.secho(f"mqttMessageTxCount: {fields[9]}", fg="green")
-            click.secho(f"mqttMessageRxCount: {fields[10]}", fg="green")
-        case Service.DEVICE_BOOT_INFO:
-            fmt = "<3B 3B 3B 3B 3B B 6B 4B 16B Q H I H b B I I i 8s 8s 8s"
-            # Unpack all fields at once
-            unpacked = struct.unpack_from(fmt, message.payload)
-
-            # Map the unpacked values to the fields
-            esp32 = unpacked[0:3]
-            sw3566 = unpacked[3:6]
-            fpga = unpacked[6:9]
-            zrlib = unpacked[9:12]
-            ESPIdfVersion = unpacked[12:15]
-            chipCores = unpacked[15]
-            bleAddress = unpacked[16:22]
-            ipv4 = unpacked[22:26]
-            ipv6 = unpacked[26:42]
-            uptime = unpacked[42]
-            chipModel = unpacked[43]
-            chipFeatures = unpacked[44]
-            chipRevision = unpacked[45]
-            wifiMaxTxPower = unpacked[46]
-            activeSW3566Count = unpacked[47]
-            fsTotalSize = unpacked[48]
-            fsUsedSize = unpacked[49]
-            resetReason = unpacked[50]
-            hardwareRev = (unpacked[51].decode("utf-8").strip("\x00"),)
-            deviceModel = (unpacked[52].decode("utf-8").strip("\x00"),)
-            productFamily = (unpacked[53].decode("utf-8").strip("\x00"),)
-            click.secho(f"ESP32: {esp32}", fg="green")
-            click.secho(f"SW3566: {sw3566}", fg="green")
-            click.secho(f"FPGA: {fpga}", fg="green")
-            click.secho(f"ZRLib: {zrlib}", fg="green")
-            click.secho(f"ESP IDF Version: {ESPIdfVersion}", fg="green")
-            click.secho(f"Chip Cores: {chipCores}", fg="green")
-            click.secho(f"BLE Address: {bleAddress}", fg="green")
-            click.secho(f"IPv4: {ipv4}", fg="green")
-            click.secho(f"IPv6: {ipv6}", fg="green")
-            click.secho(f"Uptime: {uptime}", fg="green")
-            click.secho(f"Chip Model: {chipModel}", fg="green")
-            click.secho(f"Chip Features: {chipFeatures}", fg="green")
-            click.secho(f"Chip Revision: {chipRevision}", fg="green")
-            click.secho(f"Wifi Max Tx Power: {wifiMaxTxPower}", fg="green")
-            click.secho(f"Active SW3566 Count: {activeSW3566Count}", fg="green")
-            click.secho(f"FS Total Size: {fsTotalSize}", fg="green")
-            click.secho(f"FS Used Size: {fsUsedSize}", fg="green")
-            click.secho(f"Reset Reason: {resetReason}", fg="green")
-            click.secho(f"Hardware Revision: {hardwareRev}", fg="green")
-            click.secho(f"Device Model: {deviceModel}", fg="green")
-            click.secho(f"Product Family: {productFamily}", fg="green")
-        case Service.PD_CHARGING_ALERT:
-            fmt = "<B H H H H B"
-            fields = struct.unpack_from(fmt, message.payload)
-            click.secho(f"Port: {fields[0]}", fg="green")
-            click.secho(f"PD RX Soft Reset Count: {fields[1]}", fg="green")
-            click.secho(f"PD RX Hard Reset Count: {fields[2]}", fg="green")
-            click.secho(f"PD RX Error Count: {fields[3]}", fg="green")
-            click.secho(f"PD RX Cable Reset Count: {fields[4]}", fg="green")
-        case Service.GET_PORT_PD_STATUS:
-            pd_status = ClientPDStatus.from_bytes(message.payload)
-            click.secho(f"PD status: {pd_status}", fg="green")
-        case Service.GET_DISPLAY_STATE:
-            state = message.payload[0]
-            state_mapping = {0: "off", 1: "on_full", 2: "reset"}
-            click.secho(
-                f"Display state: {state}({state_mapping.get(state)})", fg="green"
-            )
+def handle_push_message(message) -> bool:
+    if ignore_push_msg:
+        return False
+    return True
 
 
 client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, protocol=mqtt.MQTTv5)
@@ -497,7 +173,90 @@ def validate_psn(ctx, param, value):
 
 
 def send_message(topic: str, message: Message):
-    client.publish(topic, payload=message.serialize())
+    request_queue.put((topic, message))
+
+
+# Function to process outgoing requests
+def process_requests():
+    while True:
+        try:
+            topic, message = request_queue.get(timeout=0.1)
+            client.publish(topic, payload=message.serialize())
+            request_queue.task_done()
+        except queue.Empty:
+            continue
+        except Exception as e:
+            print(f"Error processing request: {e}")
+
+
+# Start request processor thread
+def start_request_processor():
+    thread = threading.Thread(target=process_requests, daemon=True)
+    thread.start()
+    return thread
+
+
+# Wait for a specific response with timeout
+def wait_for_response(
+    request: typing.Optional[Message] = None,
+    cmd: typing.Optional[SERVICE] = None,
+    timeout=5,
+    return_all=False,
+) -> typing.Optional[TelemetryMessage]:
+    if return_all:
+        try:
+            return response_queue.get(block=True, timeout=0.1)
+        except queue.Empty:
+            return None
+
+    if not (request or cmd):
+        raise ValueError("Either request or cmd must be provided")
+    start_time = time.time()
+    while time.time() - start_time < timeout:
+        try:
+            msg: TelemetryMessage = response_queue.get(block=True, timeout=0.1)
+            if cmd and msg.command == cmd:
+                return msg
+            if (
+                request
+                and msg.msg_id == request.msg_id
+                and msg.command == request.command
+            ):
+                return msg
+            # Put back messages for different commands
+            response_queue.put(msg)
+        except queue.Empty:
+            continue
+    return None
+
+
+def send_and_receive(
+    topic: str,
+    cmd: SERVICE,
+    payload: bytes | bytearray = bytes(),
+    timeout=5,
+) -> typing.Optional[TelemetryMessage]:
+    message = Message(cmd, payload)
+    send_message(topic, message)
+    response = wait_for_response(message, timeout=timeout)
+    if not response:
+        click.secho(
+            f"Receive timeout for command: 0x{cmd:04X} after {timeout} seconds",
+            fg="red",
+        )
+    return response
+
+
+def cast_to_bool(ctx, params, value) -> bool:
+    try:
+        return utils.eval_true(value)
+    except (ValueError, TypeError):
+        raise click.BadParameter("Must be a boolean")
+    return value
+
+
+def cast_state_to_int(ctx, params, value) -> int:
+    return 1 if value.lower() == "on" else 0
 
 
 @click.group()
@@ -507,8 +266,9 @@ def send_message(topic: str, message: Message):
 @click.option("--ca_certs", type=str, default="certs/ca.crt")
 @click.option("--certfile", type=str, default="certs/client.pem")
 @click.option("--keyfile", type=str, default="certs/client.key")
+@click.option("--timeout", type=int, default=15)
 @click.pass_context
-def main(
+async def main(
     ctx,
     psn: str,
     broker: str,
@@ -516,34 +276,40 @@ def main(
     ca_certs: str,
     certfile: str,
     keyfile: str,
+    timeout: int,
 ):
     ctx.ensure_object(dict)
     ctx.obj["topic"] = {
         "command": f"device/{psn}/command",
         "telemetry": f"device/{psn}/telemetry",
     }
+    ctx.obj["timeout"] = timeout
 
     @ctx.call_on_close
     def disconnect_mqtt():
-        click.secho("Press Ctrl+C to exit...", fg="green")
-        try:
-            while True:
-                time.sleep(0.01)
-        except KeyboardInterrupt:
-            click.secho("Disconnecting...", fg="yellow")
+        click.secho("Disconnecting...", fg="yellow")
         disconnect()
 
     client.tls_set(ca_certs=ca_certs, certfile=certfile, keyfile=keyfile)
     connect(broker, port)
     subscribe(ctx.obj["topic"]["telemetry"])
     click.secho(f"Connectted to MQTT broker: {broker}:{port}", fg="green")
+    start_request_processor()
 
 
 @main.command()
 @click.pass_context
 def get_esp32_version(ctx):
-    message = Message(Service.GET_ESP32_VERSION)
-    send_message(ctx.obj["topic"]["command"], message)
+    response = send_and_receive(
+        ctx.obj["topic"]["command"],
+        SERVICE.GET_AP_VERSION,
+        timeout=ctx.obj["timeout"],
+    )
+    if response:
+        click.secho(
+            f"Get ESP32 version: {response.payload[0]}.{response.payload[1]}.{response.payload[2]}",
+            fg="green",
+        )
 
 
 @main.command()
@@ -551,33 +317,90 @@ def get_esp32_version(ctx):
 @click.pass_context
 def trigger_esp32_ota(ctx, version: str):
     major, minor, patch = version.split(".")
-    message = Message(
-        Service.TRIGGER_ESP32_OTA,
+    response = send_and_receive(
+        ctx.obj["topic"]["command"],
+        SERVICE.PERFORM_WIFI_OTA,
         payload=bytes([int(major), int(minor), int(patch)]),
+        timeout=ctx.obj["timeout"],
     )
-    send_message(ctx.obj["topic"]["command"], message)
+    if response:
+        click.secho("Trigger ESP32 OTA", fg="green")
 
 
 @main.command()
 @click.argument("hash", type=str)
 @click.pass_context
 def confirm_esp32_ota(ctx, hash: str):
-    message = Message(Service.CONFIRM_ESP32_OTA, payload=bytes.fromhex(hash))
-    send_message(ctx.obj["topic"]["command"], message)
+    response = send_and_receive(
+        ctx.obj["topic"]["command"],
+        SERVICE.CONFIRM_OTA,
+        payload=bytes.fromhex(hash),
+        timeout=ctx.obj["timeout"],
+    )
+    if response:
+        click.secho("Confirm ESP32 OTA", fg="green")
 
 
 @main.command()
 @click.pass_context
 def get_sw3566_version(ctx):
-    message = Message(Service.GET_SW3566_VERSION)
-    send_message(ctx.obj["topic"]["command"], message)
+    response = send_and_receive(
+        ctx.obj["topic"]["command"],
+        SERVICE.GET_BP_VERSION,
+        timeout=ctx.obj["timeout"],
+    )
+    if response:
+        click.secho(
+            f"Get SW3566 version: {response.payload[0]}.{response.payload[1]}.{response.payload[2]}",
+            fg="green",
+        )
+
+
+@main.command()
+@click.argument("version", type=str)
+@click.option("--force", is_flag=True)
+@click.pass_context
+def upgrade_sw3566(ctx, version: str, force: bool):
+    major, minor, patch = version.split(".")
+    response = send_and_receive(
+        ctx.obj["topic"]["command"],
+        SERVICE.UPGRADE_SW3566,
+        payload=bytes([int(major), int(minor), int(patch), int(force)]),
+        timeout=ctx.obj["timeout"],
+    )
+    if response:
+        click.secho("Upgrade SW3566", fg="green")
 
 
 @main.command()
 @click.pass_context
 def get_fpga_version(ctx):
-    message = Message(Service.GET_FPGA_VERSION)
-    send_message(ctx.obj["topic"]["command"], message)
+    response = send_and_receive(
+        ctx.obj["topic"]["command"],
+        SERVICE.GET_FPGA_VERSION,
+        timeout=ctx.obj["timeout"],
+    )
+    if response:
+        click.secho(
+            f"Get FPGA version: {response.payload[0]}.{response.payload[1]}.{response.payload[2]}",
+            fg="green",
+        )
+
+
+@main.command()
+@click.argument("version", type=str)
+@click.option("--force", is_flag=True)
+@click.pass_context
+def upgrade_fpga(ctx, version: str, force: bool):
+    major, minor, patch = version.split(".")
+    response = send_and_receive(
+        ctx.obj["topic"]["command"],
+        SERVICE.UPGRADE_FPGA,
+        payload=bytes([int(major), int(minor), int(patch), int(force)]),
+        timeout=ctx.obj["timeout"],
+    )
+    if response:
+        click.secho("Upgrade FPGA", fg="green")
 
 
 @main.command()
@@ -596,8 +419,9 @@ def start_ota(
     esp32_major, esp32_minor, esp32_patch = esp32_new_version.split(".")
     sw3566_major, sw3566_minor, sw3566_patch = sw3566_new_version.split(".")
     fpga_major, fpga_minor, fpga_patch = fpga_new_version.split(".")
-    message = Message(
-        Service.START_OTA,
+    response = send_and_receive(
+        ctx.obj["topic"]["command"],
+        SERVICE.START_OTA,
         payload=bytes(
             [
                 int(sw3566_major),
@@ -612,79 +436,126 @@ def start_ota(
                 int(force),
             ]
         ),
+        timeout=ctx.obj["timeout"],
     )
-    send_message(ctx.obj["topic"]["command"], message)
-
-
-@main.command()
-@click.argument("state", type=click.Choice(["on", "off"], case_sensitive=False))
-@click.pass_context
-def set_ble_state(ctx, state: str):
-    match state:
-        case "on":
-            message = Message(Service.SET_BLE_STATE, payload=b"\x01")
-        case "off":
-            message = Message(Service.SET_BLE_STATE, payload=b"\x00")
-        case _:
-            raise click.ClickException(f"Unknown state: {state}")
-    send_message(ctx.obj["topic"]["command"], message)
+    if response:
+        click.secho("Start OTA", fg="green")
 
 
 @main.command()
 @click.argument(
     "state",
     type=click.Choice(["on", "off"], case_sensitive=False),
-    callback=lambda _, __, v: v.lower(),
+    callback=cast_state_to_int,
 )
 @click.pass_context
-def set_syslog_state(ctx, state: typing.Literal["on", "off"]):
-    message = Message(
-        Service.SET_SYSLOG_STATE,
-        payload=b"\x01" if state == "on" else b"\x00",
+def set_ble_state(ctx, state: int):
+    response = send_and_receive(
+        ctx.obj["topic"]["command"],
+        SERVICE.SET_BLE_STATE,
+        payload=bytes([state]),
+        timeout=ctx.obj["timeout"],
     )
-    send_message(ctx.obj["topic"]["command"], message)
+    if response:
+        click.secho(f"Set BLE state to {state}", fg="green")
+
+
+@main.command()
+@click.argument(
+    "state",
+    type=click.Choice(["on", "off"], case_sensitive=False),
+    callback=cast_state_to_int,
+)
+@click.pass_context
+def set_syslog_state(ctx, state: int):
+    response = send_and_receive(
+        ctx.obj["topic"]["command"],
+        SERVICE.SET_SYSLOG_STATE,
+        payload=bytes([state]),
+        timeout=ctx.obj["timeout"],
+    )
+    if response:
+        click.secho(f"Set syslog state to {state}", fg="green")
 
 
 @main.command()
 @click.argument("port", type=click.Choice(PORTS, case_sensitive=False))
 @click.pass_context
 def get_port_pd_status(ctx, port: str):
-    message = Message(
-        Service.GET_PORT_PD_STATUS, payload=bytearray([PORTS.index(port)])
+    response = send_and_receive(
+        ctx.obj["topic"]["command"],
+        SERVICE.GET_PORT_PD_STATUS,
+        payload=bytearray([PORTS.index(port)]),
+        timeout=ctx.obj["timeout"],
     )
-    send_message(ctx.obj["topic"]["command"], message)
+    if response:
+        pd_status = ClientPDStatus.from_bytes(response.payload)
+        click.secho(f"PD status: {pd_status}", fg="green")
 
 
 @main.command()
 @click.pass_context
 def get_device_password(ctx):
-    message = Message(Service.GET_DEVICE_PASSWORD)
-    send_message(ctx.obj["topic"]["command"], message)
+    response = send_and_receive(
+        ctx.obj["topic"]["command"],
+        SERVICE.GET_DEVICE_PASSWORD,
+        timeout=ctx.obj["timeout"],
+    )
+    if response:
+        click.secho(
+            f"Get password: {response.payload[0]}{response.payload[1]}{response.payload[2]}{response.payload[3]}",
+            fg="green",
+        )
 
 
 @main.command()
-@click.argument("enabled", type=click.Choice(["on", "off"], case_sensitive=False))
+@click.argument(
+    "enabled",
+    type=click.Choice(["on", "off"], case_sensitive=False),
+    callback=cast_state_to_int,
+)
 @click.pass_context
-def set_power_allocator_enabled(ctx, enabled: str):
+def set_power_allocator_enabled(ctx, enabled: int):
     payload = bytearray()
     payload.append(1)
-    payload.append(int(enabled == "on"))
-    message = Message(Service.MANAGE_POWER_ALLOCATOR_ENABLED, payload=payload)
-    send_message(ctx.obj["topic"]["command"], message)
+    payload.append(enabled)
+    response = send_and_receive(
+        ctx.obj["topic"]["command"],
+        SERVICE.MANAGE_POWER_ALLOCATOR_ENABLED,
+        payload=payload,
+        timeout=ctx.obj["timeout"],
+    )
+    if response:
+        click.secho(f"Set power allocator enabled to {bool(enabled)}", fg="green")
 
 
 @main.command()
 @click.pass_context
 def get_power_allocator_enabled(ctx):
-    message = Message(Service.MANAGE_POWER_ALLOCATOR_ENABLED, payload=b"\x00")
-    send_message(ctx.obj["topic"]["command"], message)
+    response = send_and_receive(
+        ctx.obj["topic"]["command"],
+        SERVICE.MANAGE_POWER_ALLOCATOR_ENABLED,
+        payload=b"\x00",
+        timeout=ctx.obj["timeout"],
+    )
+    if response:
+        click.secho(
+            f"Get power allocator enabled: {bool(response.payload[0])}",
+            fg="green",
+        )
 
 
 @main.command()
 @click.pass_context
 def del_power_allocator_enabled(ctx):
-    message = Message(Service.MANAGE_POWER_ALLOCATOR_ENABLED, payload=b"\x02")
-    send_message(ctx.obj["topic"]["command"], message)
+    response = send_and_receive(
+        ctx.obj["topic"]["command"],
+        SERVICE.MANAGE_POWER_ALLOCATOR_ENABLED,
+        payload=b"\x02",
+        timeout=ctx.obj["timeout"],
+    )
+    if response:
+        click.secho("Delete power allocator enabled", fg="green")
 
 
 @main.command()
@@ -703,22 +574,49 @@ def set_fpga_config(
     payload.append(adc_threshold_low)
     payload.append(adc_threshold_high)
     payload.append(action_deadzone)
-    message = Message(Service.MANAGE_FPGA_CONFIG, payload=payload)
-    send_message(ctx.obj["topic"]["command"], message)
+    response = send_and_receive(
+        ctx.obj["topic"]["command"],
+        SERVICE.MANAGE_FPGA_CONFIG,
+        payload=payload,
+        timeout=ctx.obj["timeout"],
+    )
+    if response:
+        click.secho(
+            f"Set FPGA config: adc_threshold_low: {adc_threshold_low}, adc_threshold_high: {adc_threshold_high}, action_deadzone: {action_deadzone}",
+            fg="green",
+        )
 
 
 @main.command()
 @click.pass_context
 def get_fpga_config(ctx):
-    message = Message(Service.MANAGE_FPGA_CONFIG, payload=b"\x00")
-    send_message(ctx.obj["topic"]["command"], message)
+    response = send_and_receive(
+        ctx.obj["topic"]["command"],
+        SERVICE.MANAGE_FPGA_CONFIG,
+        payload=b"\x00",
+        timeout=ctx.obj["timeout"],
+    )
+    if response:
+        adc_threshold_low = response.payload[0]
+        adc_threshold_high = response.payload[1]
+        action_deadzone = response.payload[2]
+        click.secho(
+            f"Get FPGA config: adc_threshold_low: {adc_threshold_low}, adc_threshold_high: {adc_threshold_high}, action_deadzone: {action_deadzone}",
+            fg="green",
+        )
 
 
 @main.command()
 @click.pass_context
 def del_fpga_config(ctx):
-    message = Message(Service.MANAGE_FPGA_CONFIG, payload=b"\x02")
-    send_message(ctx.obj["topic"]["command"], message)
+    response = send_and_receive(
+        ctx.obj["topic"]["command"],
+        SERVICE.MANAGE_FPGA_CONFIG,
+        payload=b"\x02",
+        timeout=ctx.obj["timeout"],
+    )
+    if response:
+        click.secho("Delete FPGA config", fg="green")
 
 
 @dataclasses.dataclass
@@ -745,12 +643,22 @@ class PowerConfig:
 
     @classmethod
     def deserialize(cls, payload: bytes):
-        return cls(*struct.unpack_from("<17B", payload))
+        version = payload[0]
+        match version:
+            case 0:
+                return cls(*struct.unpack_from("<17B", payload))
+            case 1:
+                return cls(*struct.unpack_from("<BH15B", payload))
+        raise ValueError(f"Unsupported version: {version}")
 
     def serialize(self):
         payload = bytearray()
         payload.append(self.version)
-        payload.append(self.power_budget)
+        match self.version:
+            case 0:
+                payload.append(self.power_budget)
+            case 1:
+                payload.extend(struct.pack("<H", self.power_budget))
         payload.append(self.device_high_temp_threshold)
         payload.append(self.device_high_temp_min_power)
         payload.append(self.device_low_temp_threshold)
@@ -772,8 +680,18 @@ class PowerConfig:
 @main.command()
 @click.pass_context
 def get_power_config(ctx):
-    message = Message(Service.MANAGE_POWER_CONFIG, payload=b"\x00")
-    send_message(ctx.obj["topic"]["command"], message)
+    response = send_and_receive(
+        ctx.obj["topic"]["command"],
+        SERVICE.MANAGE_POWER_CONFIG,
+        payload=b"\x00\x01",
+        timeout=ctx.obj["timeout"],
+    )
+    if response:
+        config = PowerConfig.deserialize(response.payload)
+        click.secho(
+            f"Get power config: {json.dumps(dataclasses.asdict(config), indent=4)}",
+            fg="green",
+        )
 
 
 @main.command()
@@ -784,23 +702,17 @@ async def set_power_config(ctx, items: typing.List[str]):
 
     ITEMS is a list of key=value pairs, e.g. power_budget=100
     """
-    message = Message(Service.MANAGE_POWER_CONFIG, payload=b"\x00")
-    send_message(ctx.obj["topic"]["command"], message)
-    print("Waiting for power config...")
-    receive_message = None
-    while True:
-        message_event.wait(10)
-        message_event.clear()
-        for message in reversed(receive_messages):
-            if message.command == Service.MANAGE_POWER_CONFIG:
-                receive_message = message
-                break
-        if receive_message is not None:
-            break
-    if receive_message.status != 0:
-        print("Error: ", receive_message)
+    response = send_and_receive(
+        ctx.obj["topic"]["command"],
+        SERVICE.MANAGE_POWER_CONFIG,
+        payload=b"\x00\x01",
+        timeout=ctx.obj["timeout"],
+    )
+    if not response:
+        click.secho("Failed to get power config", fg="red")
         return
-    config = PowerConfig.deserialize(receive_message.payload)
+
+    config = PowerConfig.deserialize(response.payload)
     config_dict = dataclasses.asdict(config)
     for item in items:
         key, value = item.split("=")
@@ -812,58 +724,101 @@ async def set_power_config(ctx, items: typing.List[str]):
         json.dumps(dataclasses.asdict(config), indent=4),
         flush=True,
     )
-    message = Message(Service.MANAGE_POWER_CONFIG, payload=b"\x01" + config.serialize())
-    send_message(ctx.obj["topic"]["command"], message)
+    response = send_and_receive(
+        ctx.obj["topic"]["command"],
+        SERVICE.MANAGE_POWER_CONFIG,
+        payload=b"\x01" + config.serialize(),
+        timeout=ctx.obj["timeout"],
+    )
+    if response:
+        click.secho("Set power config", fg="green")
 
 
 @main.command()
 @click.pass_context
 def reset_power_config(ctx):
-    message = Message(Service.MANAGE_POWER_CONFIG, payload=b"\x02")
-    send_message(ctx.obj["topic"]["command"], message)
+    response = send_and_receive(
+        ctx.obj["topic"]["command"],
+        SERVICE.MANAGE_POWER_CONFIG,
+        payload=b"\x02\x01",
+        timeout=ctx.obj["timeout"],
+    )
+    if response:
+        click.secho("Reset power config", fg="green")
 
 
 @main.command()
 @click.pass_context
 def get_all_power_statistics(ctx):
-    message = Message(Service.GET_ALL_POWER_STATISTICS, payload=b"")
-    send_message(ctx.obj["topic"]["command"], message)
+    response = send_and_receive(
+        ctx.obj["topic"]["command"], SERVICE.GET_ALL_POWER_STATISTICS
+    )
+    if response:
+        all_stats = AllPowerStatistics.from_buffer_copy(response.payload)
+        for port, stat in enumerate(all_stats):
+            click.secho(f"[{port}] {stat}", fg="green")
 
 
 @main.command()
 @click.pass_context
 def set_system_time(ctx):
     ts = int(time.time())
-    message = Message(Service.SET_SYSTEM_TIME, payload=struct.pack("<I", ts))
-    send_message(ctx.obj["topic"]["command"], message)
+    response = send_and_receive(
+        ctx.obj["topic"]["command"],
+        SERVICE.SET_SYSTEM_TIME,
+        payload=struct.pack("<I", ts),
+        timeout=ctx.obj["timeout"],
+    )
+    if response:
+        click.secho(f"Set system time to {ts}", fg="green")
 
 
 @main.command()
 @click.pass_context
 def get_power_supply_status(ctx):
-    message = Message(Service.GET_POWER_SUPPLY_STATUS)
-    send_message(ctx.obj["topic"]["command"], message)
+    response = send_and_receive(
+        ctx.obj["topic"]["command"],
+        SERVICE.GET_POWER_SUPPLY_STATUS,
+        timeout=ctx.obj["timeout"],
+    )
+    if response:
+        click.secho(f"Get power supply status: {response.payload.hex()}", fg="green")
 
 
 @main.command()
 @click.pass_context
 def start_telemetry_stream(ctx):
-    message = Message(Service.START_TELEMETRY_STREAM, payload=b"")
-    send_message(ctx.obj["topic"]["command"], message)
+    response = send_and_receive(
+        ctx.obj["topic"]["command"],
+        SERVICE.START_TELEMETRY_STREAM,
+        timeout=ctx.obj["timeout"],
+    )
+    if response:
+        click.secho("Start telemetry stream", fg="green")
 
 
 @main.command()
 @click.pass_context
 def stop_telemetry_stream(ctx):
-    message = Message(Service.STOP_TELEMETRY_STREAM, payload=b"")
-    send_message(ctx.obj["topic"]["command"], message)
+    response = send_and_receive(
+        ctx.obj["topic"]["command"],
+        SERVICE.STOP_TELEMETRY_STREAM,
+        timeout=ctx.obj["timeout"],
+    )
+    if response:
+        click.secho("Stop telemetry stream", fg="green")
 
 
 @main.command()
 @click.pass_context
 def reboot_device(ctx):
-    message = Message(Service.REBOOT_DEVICE)
-    send_message(ctx.obj["topic"]["command"], message)
+    response = send_and_receive(
+        ctx.obj["topic"]["command"],
+        SERVICE.REBOOT_DEVICE,
+        timeout=ctx.obj["timeout"],
+    )
+    if response:
+        click.secho("reboot device", fg="green")
 
 
 @main.command()
@@ -884,29 +839,166 @@ def manage_feature_toggle(ctx, feature: str, action: str, enabled: str):
     payload.append(ManageFeature[feature.upper()].value)
     payload.append(ManageAction[action.upper()].value)
     payload.append(int(enabled == "on"))
-    message = Message(Service.MANAGE_FEATURE_TOGGLE, payload=payload)
-    send_message(ctx.obj["topic"]["command"], message)
+    response = send_and_receive(
+        ctx.obj["topic"]["command"],
+        SERVICE.MANAGE_FEATURE_TOGGLE,
+        payload=payload,
+        timeout=ctx.obj["timeout"],
+    )
+    if response and response.status == 0 and action == "get":
+        click.secho(
+            f"Manage feature toggle: {response.payload[0]} -> {enabled}", fg="green"
+        )
 
 
 @main.command()
 @click.pass_context
 def scan_wifi(ctx):
-    message = Message(Service.SCAN_WIFI)
-    send_message(ctx.obj["topic"]["command"], message)
+    message = send_and_receive(
+        ctx.obj["topic"]["command"],
+        SERVICE.SCAN_WIFI,
+        timeout=ctx.obj["timeout"],
+    )
+    if not message:
+        click.secho("Failed to scan wifi", fg="red")
+        return
+
+    ssid_count = struct.unpack_from("B", message.payload, 0)[0]
+    offset = 1
+    ssid_list = []
+    for _ in range(ssid_count):
+        ssid_length = struct.unpack_from("B", message.payload, offset)[0]
+        offset += 1
+        ssid = struct.unpack_from(f"{ssid_length}s", message.payload, offset)[0]
+        offset += ssid_length
+        rssi = struct.unpack_from("b", message.payload, offset)[0]
+        offset += 1
+        auth_mode = struct.unpack_from("B", message.payload, offset)[0]
+        offset += 1
+        stored = struct.unpack_from("B", message.payload, offset)[0]
+        offset += 1
+
+        ssid_list.append(
+            {
+                "ssid_length": ssid_length,
+                "ssid": ssid.decode("utf-8"),
+                "rssi": rssi,
+                "auth_mode": WiFiAuthMode.get_name_from_value(auth_mode),
+                "stored": bool(stored),
+            },
+        )
+
+    for item in ssid_list:
+        click.secho(
+            f"SSID: {item['ssid']} - RSSI: {item['rssi']} - Auth: {item['auth_mode']} - Stored: {item['stored']}",
+            fg="green",
+        )
 
 
 @main.command()
 @click.pass_context
 def reset_device(ctx):
-    message = Message(Service.RESET_DEVICE)
-    send_message(ctx.obj["topic"]["command"], message)
+    response = send_and_receive(
+        ctx.obj["topic"]["command"],
+        SERVICE.RESET_DEVICE,
+        timeout=ctx.obj["timeout"],
+    )
+    if response:
+        click.secho(f"Reset device: {response.status}", fg="green")
 
 
 @main.command()
 @click.pass_context
 def get_device_model(ctx):
-    message = Message(Service.GET_DEVICE_MODEL)
-    send_message(ctx.obj["topic"]["command"], message)
+    response = send_and_receive(
+        ctx.obj["topic"]["command"],
+        SERVICE.GET_DEVICE_MODEL,
+        timeout=ctx.obj["timeout"],
+    )
+    if response and response.status == 0:
+        click.secho(f"Device model: {response.payload.decode('utf-8')}", fg="green")
+
+
+@main.command()
+@click.argument("intensity", type=int, default=128)
+@click.pass_context
+async def set_display_intensity(ctx, intensity: int) -> None:
+    response = send_and_receive(
+        ctx.obj["topic"]["command"],
+        SERVICE.GET_DISPLAY_INTENSITY,
+        payload=bytearray([intensity]),
+        timeout=ctx.obj["timeout"],
+    )
+    if response:
+        click.secho(f"Set display intensity to {intensity}", fg="green")
+
+
+@main.command()
+@click.pass_context
+async def get_display_intensity(ctx) -> None:
+    response = send_and_receive(
+        ctx.obj["topic"]["command"],
+        SERVICE.GET_DISPLAY_INTENSITY,
+        timeout=ctx.obj["timeout"],
+    )
+    if response and response.status == 0:
+        click.secho(f"Display intensity: {response.payload[0]}", fg="green")
+
+
+@main.command()
+@click.pass_context
+async def get_display_mode(ctx) -> None:
+    response = send_and_receive(
+        ctx.obj["topic"]["command"],
+        SERVICE.GET_DISPLAY_MODE,
+        timeout=ctx.obj["timeout"],
+    )
+    if response and response.status == 0:
+        mode = response.payload[0]
+        mode_mapping = {0: "off", 1: "manual", 2: "power_meter"}
+        click.secho(f"Display mode: {mode}({mode_mapping.get(mode)})", fg="green")
+
+
+@main.command()
+@click.argument(
+    "mode",
+    type=click.Choice(["off", "manual", "power_meter"], case_sensitive=False),
+    default="power_meter",
+)
+@click.pass_context
+async def set_display_mode(ctx, mode: str) -> None:
+    mode_mapping = {"off": 0, "manual": 1, "power_meter": 2}
+    payload = bytearray()
+    payload.append(mode_mapping[mode])
+    response = send_and_receive(
+        ctx.obj["topic"]["command"],
+        SERVICE.SET_DISPLAY_MODE,
+        payload=payload,
+        timeout=ctx.obj["timeout"],
+    )
+    if response and response.status == 0:
+        click.secho(f"Set display mode to {mode}", fg="green")
+
+
+@main.command()
+@click.argument(
+    "flip",
+    type=click.Choice(["normal", "flip"], case_sensitive=False),
+    default="normal",
+)
+@click.pass_context
+async def set_display_flip(ctx, flip: str) -> None:
+    flip_mapping = {"normal": 0, "flip": 1}
+    payload = bytearray()
+    payload.append(flip_mapping[flip])
+    response = send_and_receive(
+        ctx.obj["topic"]["command"],
+        SERVICE.SET_DISPLAY_FLIP,
+        payload=payload,
+        timeout=ctx.obj["timeout"],
+    )
+    if response and response.status == 0:
+        click.secho(f"Set display flip to {flip}", fg="green")
 
 
 @main.command()
@@ -916,15 +1008,51 @@ async def set_display_state(ctx, state: str) -> None:
     state_mapping = {"off": 0, "on_full": 1, "reset": 2}
     payload = bytearray()
     payload.append(state_mapping[state])
-    message = Message(Service.SET_DISPLAY_STATE, payload=payload)
-    send_message(ctx.obj["topic"]["command"], message)
+    response = send_and_receive(
+        ctx.obj["topic"]["command"],
+        SERVICE.SET_DISPLAY_STATE,
+        payload=payload,
+        timeout=ctx.obj["timeout"],
+    )
+    if response and response.status == 0:
+        click.secho(f"Set display state to {state}", fg="green")
 
 
 @main.command()
 @click.pass_context
 async def get_display_state(ctx) -> None:
-    message = Message(Service.GET_DISPLAY_STATE)
-    send_message(ctx.obj["topic"]["command"], message)
+    response = send_and_receive(
+        ctx.obj["topic"]["command"],
+        SERVICE.GET_DISPLAY_STATE,
+        timeout=ctx.obj["timeout"],
+    )
+    if response and response.status == 0:
+        state = response.payload[0]
+        state_mapping = {0: "off", 1: "on_full", 2: "reset"}
+        click.secho(f"Display state: {state}({state_mapping.get(state)})", fg="green")
+
+
+@main.command()
+@click.argument("port", type=click.Choice(PORTS, case_sensitive=False))
+@click.argument("command", type=click.IntRange(0, 0x10000, max_open=True))
+@click.argument("data", type=str, default="")
+@click.option("-a", "--address", type=str, default=None)
+@click.pass_context
+async def forward_port(ctx, port: str, command: int, data: str, address: str) -> None:
+    payload = bytearray()
+    payload.append(PORTS.index(port) & 0xFF)
+    payload.append(command & 0xFF)
+    payload.append((command >> 8) & 0xFF)
+    if data:
+        payload.extend(bytes.fromhex(data))
+    response = send_and_receive(
+        ctx.obj["topic"]["command"],
+        SERVICE.FORWARD_PORT,
+        payload=payload,
+        timeout=ctx.obj["timeout"],
+    )
+    if response and response.status == 0:
+        click.secho(f"Forward port: {response.payload.hex()}", fg="green")
 
 
 @main.command()
@@ -943,17 +1071,336 @@ def set_wifi_ssid_and_password(ctx, ssid: str, password: str, no_passwd: bool):
         + ssid_bytes
         + password.encode("utf-8")
     )
-    message = Message(Service.SET_WIFI_SSID_AND_PASSWORD, payload=payload)
-    send_message(ctx.obj["topic"]["command"], message)
+    response = send_and_receive(
+        ctx.obj["topic"]["command"],
+        SERVICE.SET_WIFI_SSID_AND_PASSWORD,
+        payload=payload,
+        timeout=ctx.obj["timeout"],
+    )
+    if response and response.status == 0:
+        click.secho("Set wifi ssid and password", fg="green")
 
 
 @main.command()
-@click.argument("state", type=click.Choice(["on", "off"], case_sensitive=False))
+@click.argument(
+    "state",
+    type=click.Choice(["on", "off"], case_sensitive=False),
+    callback=cast_state_to_int,
+)
 @click.pass_context
-def switch_device(ctx, state: str):
-    message = Message(Service.SWITCH_DEVICE, payload=bytes([int(state == "on")]))
-    send_message(ctx.obj["topic"]["command"], message)
+def switch_device(ctx, state: int):
+    response = send_and_receive(
+        ctx.obj["topic"]["command"],
+        SERVICE.SWITCH_DEVICE,
+        payload=bytes([state]),
+        timeout=ctx.obj["timeout"],
+    )
+    if response and response.status == 0:
+        click.secho(f"Switch device: {state}", fg="green")
 
+
+@main.command()
+@click.pass_context
+def get_charging_status(ctx):
+    response = send_and_receive(
+        ctx.obj["topic"]["command"],
+        SERVICE.GET_CHARGING_STATUS,
+        timeout=ctx.obj["timeout"],
+    )
+    if response and response.status == 0:
+        click.secho(f"Get charging status: {bin(response.payload[0])}", fg="green")
+
+
+def get_wifi_status(ctx):
+    response = send_and_receive(
+        ctx.obj["topic"]["command"],
+        SERVICE.GET_WIFI_STATUS,
+        timeout=ctx.obj["timeout"],
+    )
+    if response and response.status == 0:
+        click.secho(f"Get wifi status: {response.payload[0]}", fg="green")
+
+
+@main.command()
+@click.pass_context
+def reset_wifi(ctx):
+    response = send_and_receive(
+        ctx.obj["topic"]["command"],
+        SERVICE.RESET_WIFI,
+        timeout=ctx.obj["timeout"],
+    )
+    if response and response.status == 0:
+        click.secho("Reset wifi", fg="green")
+
+
+@main.command()
+@click.pass_context
+def get_wifi_records(ctx):
+    response = send_and_receive(
+        ctx.obj["topic"]["command"],
+        SERVICE.GET_WIFI_RECORDS,
+        timeout=ctx.obj["timeout"],
+    )
+    if not response or response.status != 0:
+        return
+
+    payload = response.payload
+    ssid_count = struct.unpack_from("B", payload, 0)[0]
+    offset = 1
+    ssid_list = []
+    for _i in range(ssid_count):
+        ssid_length = struct.unpack_from("B", payload, offset)[0]
+        offset += 1
+        ssid = struct.unpack_from(f"{ssid_length}s", payload, offset)[0]
+        offset += ssid_length
+        auth_mode = struct.unpack_from("B", payload, offset)[0]
+        offset += 1
+
+        ssid_list.append(
+            {
+                "ssid_length": ssid_length,
+                "ssid": ssid.decode("utf-8"),
+                "auth_mode": WiFiAuthMode.get_name_from_value(auth_mode),
+            },
+        )
+
+    for item in ssid_list:
+        click.secho(
+            f"SSID: {item['ssid']} - Auth: {item['auth_mode']}",
+            fg="green",
+        )
+
+
+@main.command()
+@click.pass_context
+def get_hardware_revision(ctx):
+    response = send_and_receive(
+        ctx.obj["topic"]["command"],
+        SERVICE.GET_HARDWARE_REVISION,
+        timeout=ctx.obj["timeout"],
+    )
+    if response and response.status == 0:
+        click.secho(
+            f"Get hardware revision: {response.payload.decode('utf-8')}",
+            fg="green",
+        )
+
+
+def handle_port_config_resp(response: typing.Optional[TelemetryMessage]) -> None:
+    if not response or response.status != 0:
+        return
+
+    offset = 0
+    size = 4
+    for i in range(5):
+        size = 4
+        supply = b""
+        if response.payload[offset] == 0:
+            size = 3
+            supply = b"\x01"
+        config = PortConfig.from_buffer_copy(
+            response.payload[offset : offset + size] + supply
+        )
+        click.secho(
+            f"port {i}: {response.payload[offset : offset + size].hex()}",
+            fg="green",
+        )
+        click.secho(f"{config}", fg="green")
+        offset += size
+        click.secho("")
+
+
+@main.command()
+@click.pass_context
+def get_port_config(ctx):
+    response = send_and_receive(
+        ctx.obj["topic"]["command"],
+        SERVICE.GET_PORT_CONFIG,
+        timeout=ctx.obj["timeout"],
+    )
+    handle_port_config_resp(response)
+
+
+@main.command()
+@click.pass_context
+def get_port_config1(ctx):
+    response = send_and_receive(
+        ctx.obj["topic"]["command"],
+        SERVICE.GET_PORT_CONFIG1,
+        payload=bytearray([1]),
+        timeout=ctx.obj["timeout"],
+    )
+    handle_port_config_resp(response)
+
+
+@main.command()
+@click.argument("ports", type=click.Choice(PORTS, case_sensitive=False), nargs=-1)
+@click.option("--tfcp", is_flag=True, default=False)
+@click.option("--pe", is_flag=True, default=False)
+@click.option("--qc2p0", is_flag=True, default=False)
+@click.option("--qc3p0", is_flag=True, default=False)
+@click.option("--qc3plus", is_flag=True, default=False)
+@click.option("--afc", is_flag=True, default=False)
+@click.option("--fcp", is_flag=True, default=False)
+@click.option("--hvscp", is_flag=True, default=False)
+@click.option("--lvscp", is_flag=True, default=False)
+@click.option("--sfcp", is_flag=True, default=False)
+@click.option("--apple", is_flag=True, default=False)
+@click.option("--samsung", is_flag=True, default=False)
+@click.option("--ufcs", is_flag=True, default=False)
+@click.option("--pd", is_flag=True, default=False)
+@click.option("--pdcompat", is_flag=True, default=False)
+@click.option("--pd_lvpps", is_flag=True, default=False)
+@click.option("--pdepr", is_flag=True, default=False)
+@click.option("--pdrpi", is_flag=True, default=False)
+@click.option("--pd_hvpps", is_flag=True, default=False)
+@click.pass_context
+def set_port_config1(
+    ctx,
+    ports: typing.Tuple[str],
+    tfcp: bool,
+    pe: bool,
+    qc2p0: bool,
+    qc3p0: bool,
+    qc3plus: bool,
+    afc: bool,
+    fcp: bool,
+    hvscp: bool,
+    lvscp: bool,
+    sfcp: bool,
+    apple: bool,
+    samsung: bool,
+    ufcs: bool,
+    pd: bool,
+    pdcompat: bool,
+    pd_lvpps: bool,
+    pdepr: bool,
+    pdrpi: bool,
+    pd_hvpps: bool,
+):
+    version = 1
+    default_value = [version, 0, 0]
+    if version == 1:
+        default_value = [version, 0, 0, 0]
+    payload = bytearray()
+    set_ports = 0
+    for i, port in enumerate(PORTS):
+        if port not in ports:
+            payload.extend(default_value)
+            continue
+        set_ports |= 1 << i
+        config = PortConfigInternal(
+            version,
+            tfcp,
+            pe,
+            qc2p0,
+            qc3p0,
+            qc3plus,
+            afc,
+            fcp,
+            hvscp,
+            lvscp,
+            sfcp,
+            apple,
+            samsung,
+            ufcs,
+            pd,
+            is_pd_compat_mode=pd and pdcompat,
+            is_pd_lvpps_enabled=pd and pd_lvpps,
+            is_pdepr_enabled=pd and pdepr,
+            is_pdrpi_enabled=pd and pdrpi,
+            is_pd_hvpps_enabled=pd and pd_hvpps,
+        )
+        payload.extend(config.serialize())
+    for _ in range(8 - len(PORTS)):
+        payload.extend(default_value)
+    payload.insert(0, set_ports)
+
+    response = send_and_receive(
+        ctx.obj["topic"]["command"],
+        SERVICE.SET_PORT_CONFIG1,
+        payload=payload,
+        timeout=ctx.obj["timeout"],
+    )
+    if response and response.status == 0:
+        click.secho("Set port config1", fg="green")
+
+
+@main.command()
+@click.pass_context
+def get_messages(ctx):
+    global ignore_push_msg
+    ignore_push_msg = False
+    while True:
+        message = wait_for_response(return_all=True)
+        if message:
+            click.secho(f"Message: {message}", fg="green")
+
+
+@main.command()
+@click.argument("port", type=click.Choice(PORTS, case_sensitive=False))
+@click.pass_context
+def turn_on_port(ctx, port: str):
+    response = send_and_receive(
+        ctx.obj["topic"]["command"],
+        SERVICE.TURN_ON_PORT,
+        payload=bytes([PORTS.index(port)]),
+        timeout=ctx.obj["timeout"],
+    )
+    if response and response.status == 0:
+        click.secho(f"Turn on port {port}", fg="green")
+
+
+@main.command()
+@click.argument("port", type=click.Choice(PORTS, case_sensitive=False))
+@click.pass_context
+def turn_off_port(ctx, port: str):
+    response = send_and_receive(
+        ctx.obj["topic"]["command"],
+        SERVICE.TURN_OFF_PORT,
+        payload=bytes([PORTS.index(port)]),
+        timeout=ctx.obj["timeout"],
+    )
+    if response and response.status == 0:
+        click.secho(f"Turn off port {port}", fg="green")
+
+
+@main.command()
+@click.argument(
+    "strategy", type=click.Choice(["fast", "slow", "usba"], case_sensitive=False)
+)
+@click.pass_context
+def set_charging_strategy(ctx, strategy: str):
+    strategy_mapping = {
+        "fast": 0,
+        "slow": 1,
+        "usba": 6,
+    }
+    payload = bytearray()
+    payload.append(strategy_mapping[strategy])
+    response = send_and_receive(
+        ctx.obj["topic"]["command"],
+        SERVICE.SET_CHARGING_STRATEGY,
+        payload=payload,
+        timeout=ctx.obj["timeout"],
+    )
+    if response and response.status == 0:
+        click.secho(f"Set charging strategy to {strategy}", fg="green")
+
+
+@main.command()
+@click.pass_context
+def get_wifi_state_machine(ctx):
+    response = send_and_receive(
+        ctx.obj["topic"]["command"],
+        SERVICE.GET_WIFI_STATE_MACHINE,
+        timeout=ctx.obj["timeout"],
+    )
+    if response and response.status == 0:
+        click.secho(
+            f"Get wifi state machine: {WiFiStateType(response.payload[0]).name}",
+            fg="green",
+        )
 
 if __name__ == "__main__":
     main()

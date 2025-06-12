@@ -9,6 +9,9 @@
 
 #include "esp_err.h"
 
+#define WIFI_COUNTRY_UNKNOWN "ZZ"
+#define WIFI_COUNTRY_CN "CN"
+
 class MachineInfo {
  public:
   // Retrieve singleton instance
@@ -33,7 +36,9 @@ class MachineInfo {
   const std::array<uint8_t, 3>& GetFPGAVersion() const;
   const std::array<uint8_t, 3>& GetZRLIBVersion() const;
   const std::string& GetCountryCode() const;
-  bool IsChina() const;
+  const std::string& GetMDNSHostname() const;
+  bool IsInChina() const;
+  bool IsValidCountryCode() const;
 
   uint8_t GetDeviceModelEnumVal() const;
   uint8_t GetProductFamilyEnumVal() const;
@@ -67,7 +72,8 @@ class MachineInfo {
   std::array<uint8_t, 3> mcu_version_;    // MCU Version
   std::array<uint8_t, 3> fpga_version_;   // FPGA Version
   std::array<uint8_t, 3> zrlib_version_;  // ZRLib Version
-  std::string country_code_;              // Current Country Code
+  std::string country_code_;              // Apparent Country Code
+  std::string mdns_hostname_;             // MDNS hostname
 
   // Mutex to ensure thread safety (if accessed by multiple threads)
   mutable std::mutex mutex_;
@@ -82,6 +88,7 @@ class MachineInfo {
   esp_err_t ReadProductColor();
   esp_err_t ReadPIN();
   esp_err_t ReadVersion();
+  esp_err_t ReadMDNSHostname();
 };
 
 #endif  // MACHINE_INFO_H

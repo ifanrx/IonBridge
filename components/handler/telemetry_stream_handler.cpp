@@ -3,7 +3,6 @@
 #include <cstdint>
 #include <vector>
 
-#include "app.h"
 #include "esp_err.h"
 #include "esp_log.h"
 #include "telemetry_task.h"
@@ -11,23 +10,24 @@
 static const char *TAG = "TelemetryStream";
 
 esp_err_t TelemetryStreamHandler::StartTelemetryStream(
-    AppContext &ctx, const std::vector<uint8_t> &request,
-    std::vector<uint8_t> &response) {
-  if (TelemetryTask::GetInstance() == nullptr) {
-    ESP_LOGE(TAG, "TelemetryTask is not initialized");
-    return ESP_ERR_INVALID_STATE;
-  }
-  TelemetryTask::GetInstance()->SubscribeTelemetryStream();
+    const std::vector<uint8_t> &request, std::vector<uint8_t> &response) {
+  TelemetryTask::GetInstance().SubscribeTelemetryStream();
   return ESP_OK;
 }
 
 esp_err_t TelemetryStreamHandler::StopTelemetryStream(
-    AppContext &ctx, const std::vector<uint8_t> &request,
-    std::vector<uint8_t> &response) {
-  if (TelemetryTask::GetInstance() == nullptr) {
-    ESP_LOGE(TAG, "TelemetryTask is not initialized");
-    return ESP_ERR_INVALID_STATE;
+    const std::vector<uint8_t> &request, std::vector<uint8_t> &response) {
+  TelemetryTask::GetInstance().UnsubscribeTelemetryStream();
+  return ESP_OK;
+}
+
+esp_err_t TelemetryStreamHandler::SetTelemetryDebug(
+    const std::vector<uint8_t> &request, std::vector<uint8_t> &response) {
+  if (request.size() < 1) {
+    ESP_LOGE(TAG, "Invalid request size: %zu", request.size());
+    return ESP_ERR_INVALID_SIZE;
   }
-  TelemetryTask::GetInstance()->UnsubscribeTelemetryStream();
+  bool debug = request[0] != 0;
+  TelemetryTask::GetInstance().SetDebug(debug);
   return ESP_OK;
 }

@@ -52,6 +52,10 @@ typedef struct {
   uint8_t checksum;  // Checksum for integrity check
 } BLEHeader;
 
+#ifdef __cplusplus
+}
+#endif
+
 class Message {
   uint8_t *payload_;
   BLEHeader header_;
@@ -106,9 +110,5 @@ class MessageFactory {
 
 void process_message(Message &msg, IMessageHandler &handler);
 bool construct_message(const uint8_t *bytes, const size_t length, Message &msg);
-
-#ifdef __cplusplus
-}
-#endif
 
 #endif  // H_PROTOCOL_

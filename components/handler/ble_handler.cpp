@@ -13,16 +13,14 @@
 
 static const char *TAG = "BleHandler";
 
-esp_err_t BleHandler::BLEEchoTest(AppContext &ctx,
-                                  const std::vector<uint8_t> &request,
+esp_err_t BleHandler::BLEEchoTest(const std::vector<uint8_t> &request,
                                   std::vector<uint8_t> &response) {
   ESP_LOGI(TAG, "BLE echo test, request size: %d", request.size());
   response.insert(response.end(), request.begin(), request.end());
   return ESP_OK;
 }
 
-esp_err_t BleHandler::GetDeviceBleAddress(AppContext &ctx,
-                                          const std::vector<uint8_t> &request,
+esp_err_t BleHandler::GetDeviceBleAddress(const std::vector<uint8_t> &request,
                                           std::vector<uint8_t> &response) {
   const uint8_t *addr = MachineInfo::GetInstance().GetBleMac().data();
   ESP_LOGD(TAG, "BLE address: %s", FORMAT_MAC(addr));
@@ -30,8 +28,7 @@ esp_err_t BleHandler::GetDeviceBleAddress(AppContext &ctx,
   return ESP_OK;
 }
 
-esp_err_t BleHandler::SetBleState(AppContext &ctx,
-                                  const std::vector<uint8_t> &request,
+esp_err_t BleHandler::SetBleState(const std::vector<uint8_t> &request,
                                   std::vector<uint8_t> &response) {
   if (request.size() != 1) {
     ESP_LOGE(TAG, "SetBleState invalid request size: %d", request.size());
@@ -50,8 +47,7 @@ esp_err_t BleHandler::SetBleState(AppContext &ctx,
   return ESP_OK;
 }
 
-esp_err_t BleHandler::GetBleRSSI(AppContext &ctx,
-                                 const std::vector<uint8_t> &request,
+esp_err_t BleHandler::GetBleRSSI(const std::vector<uint8_t> &request,
                                  std::vector<uint8_t> &response) {
   int8_t rssi = 0;
   ESP_RETURN_ON_ERROR(get_ble_conn_rssi(&rssi), TAG, "get_ble_conn_rssi");
@@ -59,8 +55,7 @@ esp_err_t BleHandler::GetBleRSSI(AppContext &ctx,
   return ESP_OK;
 }
 
-esp_err_t BleHandler::GetBleMTU(AppContext &ctx,
-                                const std::vector<uint8_t> &request,
+esp_err_t BleHandler::GetBleMTU(const std::vector<uint8_t> &request,
                                 std::vector<uint8_t> &response) {
   EMPLACE_BACK_INT16(response, get_ble_mtu());
   return ESP_OK;

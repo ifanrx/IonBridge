@@ -24,3 +24,12 @@ server_certs/ca_key.pem
 *_REMOTE_*.txt
 .idea/
 *.bak
+bird_fs/
+changelog.txt
+mqtt_certs
+
+# Ignore symbolic links
+littlefs
+!littlefs/
+
+hash.json

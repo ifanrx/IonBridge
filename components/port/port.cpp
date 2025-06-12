@@ -1,6 +1,7 @@
 #include "port.h"
 
 #include <sys/param.h>
+#include <sys/types.h>
 
 #include <algorithm>
 #include <cinttypes>
@@ -12,17 +13,26 @@
 #include "esp_check.h"
 #include "esp_err.h"
 #include "esp_log.h"
+#include "esp_log_buffer.h"
+#include "esp_log_level.h"
 #include "esp_timer.h"
 #include "ionbridge.h"
 #include "machine_info.h"
 #include "port_data.h"
+#include "port_state.h"
 #include "rpc.h"
 #include "sdkconfig.h"
 
 #ifdef CONFIG_MCU_MODEL_SW3566
+#include <cstddef>
+
 #include "sw3566_data_types.h"
 #include "utils.h"
 #endif
+
+#define SET_BITS(original, bits, value) \
+  ((original) =                         \
+       ((original) & ~((1 << bits) - 1)) | ((value) & ((1 << bits) - 1)))
 
 #define FC_HANDSHAKE_USAGE_TIME 5e6
 #define LIMITED_PORT_POWER_BUDGET CONFIG_LIMITED_PORT_POWER_BUDGET
@@ -51,8 +61,10 @@ PortConfig default_port_config = {
             .EnablePd = true,
             .EnablePdCompatMode = false,
             .LimitedCurrentMode = false,
-            .EnablePdPPS = true,
+            .EnablePdLVPPS = true,
             .EnablePdEPR = true,
+            .EnablePd5V5A = false,
+            .EnablePdHVPPS = true,
             .reserved = 0,
         },
 };
@@ -77,8 +89,10 @@ PortConfig default_port_a_config = {
             .EnablePd = false,
             .EnablePdCompatMode = false,
             .LimitedCurrentMode = false,
-            .EnablePdPPS = false,
+            .EnablePdLVPPS = false,
             .EnablePdEPR = false,
+            .EnablePd5V5A = false,
+            .EnablePdHVPPS = false,
             .reserved = 0,
         },
 };
@@ -90,11 +104,19 @@ Port::Port(uint8_t port_id)
   average_data_ = PortAverageData();
   stats_last_updated_at_ = esp_timer_get_time();
   state_ = &PortActiveState::GetInstance();
+#ifdef CONFIG_MCU_MODEL_SW3566
+  system_flags_ = {
+      .commit = 0,
+      .unused0 = true,
+      .port_type = static_cast<uint8_t>(PortType::PORT_TYPE_C),
+      .enable_cable_compensation = true,
+      .cable_compensation = 1,
+      .fixed_voltage_offset = 0,
+      .unused = 0,
+  };
+#endif
   this->Reset();
 }
-
-// Singleton, cannot destroy!
-Port::~Port() { return; }
 
 bool Port::Initialize(bool active, uint8_t initial_power_budget) {
   if (!active) {
@@ -103,14 +125,28 @@ bool Port::Initialize(bool active, uint8_t initial_power_budget) {
   }
   esp_err_t ret __attribute__((unused));
 #ifdef CONFIG_MCU_MODEL_SW3566
-  ESP_GOTO_ON_ERROR(
-      rpc::mcu::get_bootloader_info(id_, &bootloader_info_.version,
-                                    &bootloader_info_.flash_timestamp),
-      RECOVER, TAG, "rpc::mcu::get_bootloader_info(%d)", id_);
+  ESP_GOTO_ON_ERROR(rpc::mcu::set_system_flags(id_, &system_flags_), RECOVER,
+                    TAG, "rpc::mcu::set_system_flags(%d)", id_);
+#if defined(CONFIG_DEVICE_HUMMING_BOARD) && CONFIG_SW3566_TYPE_A_PORT == -1
+  if (id_ == 0) {
+    system_flags_.port_type = static_cast<uint8_t>(PortType::PORT_TYPE_C);
+    system_flags_.commit = 0x55;
+    ESP_GOTO_ON_ERROR(rpc::mcu::set_system_flags(id_, &system_flags_), RECOVER,
+                      TAG, "rpc::mcu::set_system_flags(%d)", id_);
+    system_flags_.commit = 0;
+  }
+#endif
 #endif
   ESP_GOTO_ON_ERROR(rpc::mcu::get_power_features(id_, &features_), RECOVER, TAG,
                     "rpc::mcu::get_power_features(%d)", id_);
+  ESP_LOGD(TAG, "Port features: ");
+  ESP_LOG_BUFFER_HEX_LEVEL(TAG, &features_, sizeof(features_), ESP_LOG_DEBUG);
 
+  if (IsTypeA()) {
+    config_ = default_port_a_config;
+  } else {
+    config_ = default_port_config;
+  }
   if (id_ == 1 || id_ == 3) {
     // Check hardware version
     const std::string &hw_version = MachineInfo::GetInstance().GetHwRev();
@@ -124,11 +160,8 @@ bool Port::Initialize(bool active, uint8_t initial_power_budget) {
   }
 
 #if defined(CONFIG_MCU_MODEL_SW3566) || defined(CONFIG_MCU_MODEL_FAKE_SW3566)
-  ESP_GOTO_ON_ERROR(
-      rpc::mcu::set_subscription(id_, {.EnablePortDetailsUpdate = true,
-                                       .EnablePDStatusUpdate = true,
-                                       .unused = 0}),
-      RECOVER, TAG, "Unable to subscribe to port %d", id_);
+  ESP_GOTO_ON_ERROR(rpc::mcu::set_subscription(id_, subscriptions_), RECOVER,
+                    TAG, "Unable to subscribe to port %d", id_);
 #endif
   initial_power_budget_ = initial_power_budget;
   initialized_ = true;
@@ -228,6 +261,10 @@ bool Port::Toggle() {
 }
 
 void Port::UpdateData(const PortDetails &details) {
+  if (!Actived()) {
+    return;
+  }
+
   updated_at_ = esp_timer_get_time();
 
   ESP_LOGD(TAG, "#PORTSTATS[%d] T=%dC, I=%dmA, V=%dmV, connected=%d", id_,
@@ -235,7 +272,7 @@ void Port::UpdateData(const PortDetails &details) {
            details.connected);
   details_ = details;
   attached_ = details.connected;
-  if (attached_ && this->Actived()) {
+  if (attached_) {
     if (attached_at_ == -1) {
       attached_at_ = esp_timer_get_time() / 1e3;
       ESP_LOGD(TAG, "#PORTSTATS[%d] attached_at: %" PRIi32, id_,
@@ -244,14 +281,11 @@ void Port::UpdateData(const PortDetails &details) {
     data_.SetFCProtocol(static_cast<uint8_t>(details.fc_protocol));
     data_.SetCurrent(details.iout_value);
     data_.SetVoltage(details.vout_value);
+    data_.SetTemperature(details.die_temperature);
+    data_.SetVinValue(details.vin_value);
   } else {
     data_.Reset();
     attached_at_ = -1;
-  }
-
-  if (this->Actived()) {
-    data_.SetTemperature(details.die_temperature);
-    data_.SetVinValue(details.vin_value);
   }
 
   // Update average data
@@ -266,12 +300,23 @@ void Port::UpdateData(const PortDetails &details) {
   }
 }
 
+void Port::SetInactiveHistoricalData() {
+  // append zero data to historical data while port is inactive
+  int64_t now = esp_timer_get_time();
+  if (now - stats_last_updated_at_ > PORT_HISTORICAL_DATA_INTERVAL) {
+    stats_last_updated_at_ = now;
+    average_data_.Reset();
+    historical_stats_.Push(PortStatsData(average_data_));
+  }
+}
+
 void Port::Reset() {
   attached_ = false;
   attached_at_ = -1;
   updated_at_ = -1;
   memset(&pd_status_, 0, sizeof(pd_status_));
   memset(&details_, 0, sizeof(details_));
+  details_.fc_protocol = FC_NOT_CHARGING;
   data_.Reset();
 }
 
@@ -280,39 +325,54 @@ void Port::EnsureBudgetInRange(uint8_t *power) const {
   *power = std::min(std::max(rounded_power, MinPowerCap()), MaxPowerCap());
 }
 
-bool Port::SetMaxPowerBudget(uint8_t max_power_budget, uint8_t watermark,
-                             bool force_rebroadcast) {
-  esp_err_t __attribute__((unused)) ret;
+esp_err_t Port::SetMaxPowerBudget(uint8_t maxPowerBudget, uint8_t watermark,
+                                  bool forceRebroadcast,
+                                  bool enterCheckingOnFailed) {
+  esp_err_t ret = ESP_OK;
   int64_t now = esp_timer_get_time();
-  if (now - cap_updated_at_ < 1e6) {
-    return false;
+
+  constexpr int64_t kMinUpdateIntervalUs = 1e6;  // 1 second in microseconds
+  // Skip update if not forced, budget not increased, and called too soon
+  bool skip_update = !forceRebroadcast && maxPowerBudget <= power_budget_ &&
+                     (now - cap_updated_at_ < kMinUpdateIntervalUs);
+  if (skip_update) {
+    ESP_LOGD(TAG, "Port %d: SetMaxPowerBudget called too soon, ignoring", id_);
+    return ESP_OK;
   }
   cap_updated_at_ = now;
-  EnsureBudgetInRange(&max_power_budget);
-  if (max_power_budget == power_budget_) {
-    return false;
+
+  EnsureBudgetInRange(&maxPowerBudget);
+  if (watermark == 0 || watermark > maxPowerBudget) {
+    watermark = maxPowerBudget;
   }
-  if (!watermark || watermark > max_power_budget) {
-    watermark = max_power_budget;
+  if (maxPowerBudget == power_budget_ && watermark == power_budget_watermark_) {
+    ESP_LOGD(TAG, "Port %d: Power budget already set to %dW", id_,
+             power_budget_);
+    return ESP_OK;
   }
 
-  ESP_LOGD(TAG, "Port %d power budget: %dW => %dW", id_, power_budget_,
-           max_power_budget);
-  uint8_t set_budget_ = 0;
+  ESP_LOGD(TAG, "Port %d power budget: %dW => %dW, wmk: %dW => %dW", id_,
+           power_budget_, maxPowerBudget, power_budget_watermark_, watermark);
   ESP_GOTO_ON_ERROR(
-      rpc::mcu::set_max_power_budget(id_, max_power_budget, watermark,
-                                     force_rebroadcast, &set_budget_),
+      rpc::mcu::set_max_power_budget(id_, maxPowerBudget, watermark,
+                                     forceRebroadcast, &power_budget_),
       RESET_STATE, TAG, "rpc::mcu::set_max_power_budget(%d, %d)", id_,
-      max_power_budget);
-  if (set_budget_) {
-    ESP_LOGD(TAG, "Port %d set_max_power_budget_return: %dW", id_, set_budget_);
-  }
-  power_budget_ = max_power_budget;
+      maxPowerBudget);
+#ifndef CONFIG_MCU_MODEL_SW3566
+  ESP_GOTO_ON_ERROR(rpc::mcu::get_max_power_budget(id_, &power_budget_),
+                    RESET_STATE, TAG, "rpc::mcu::get_max_power_budget(%d)",
+                    id_);
+#endif
+
+  power_budget_watermark_ = watermark;
   ESP_LOGD(TAG, "Port %d power budget changed: %dW", id_, power_budget_);
-  return true;
+  return ESP_OK;
+
 RESET_STATE:
-  this->SetState(PortStateType::CHECKING);
-  return false;
+  if (ret != ESP_OK && enterCheckingOnFailed) {
+    this->SetState(PortStateType::CHECKING);
+  }
+  return ret;
 }
 
 bool Port::DecreasePowerBudget(uint8_t power) {
@@ -320,7 +380,7 @@ bool Port::DecreasePowerBudget(uint8_t power) {
   power = (power + 4) / 5 * 5;
   uint8_t new_budget =
       (power_budget_ > power) ? power_budget_ - power : this->MinPowerCap();
-  return SetMaxPowerBudget(new_budget);
+  return SetMaxPowerBudget(new_budget) == ESP_OK;
 }
 
 bool Port::IncreasePowerBudget(uint8_t power) {
@@ -328,7 +388,7 @@ bool Port::IncreasePowerBudget(uint8_t power) {
   power = (power + 4) / 5 * 5;
   uint8_t new_budget = power_budget_ + power;
   if (new_budget <= MaxPowerCap()) {
-    return SetMaxPowerBudget(new_budget);
+    return SetMaxPowerBudget(new_budget) == ESP_OK;
   }
   return false;
 }
@@ -336,22 +396,14 @@ bool Port::IncreasePowerBudget(uint8_t power) {
 bool Port::ApplyMaxPowerBudget(uint8_t max_power_budget) {
   esp_err_t __attribute__((unused)) ret;
 
-  if (this->Dead()) {
-    ESP_LOGE(TAG, "Cannot apply max power budget for dead port %d", id_);
+  if (this->Abnormal()) {
+    ESP_LOGE(TAG, "Cannot apply max power budget for abnormal port %d", id_);
     return false;
   }
 
-  EnsureBudgetInRange(&max_power_budget);
-  ESP_GOTO_ON_ERROR(rpc::mcu::set_max_power_budget(id_, max_power_budget,
-                                                   max_power_budget, true),
-                    RESET_STATE, TAG, "rpc::mcu::set_max_power_budget(%d, %d)",
-                    id_, max_power_budget);
-  ESP_GOTO_ON_ERROR(rpc::mcu::get_max_power_budget(id_, &power_budget_),
-                    RESET_STATE, TAG, "rpc::mcu::get_max_power_budget(%d)",
-                    id_);
-
-  ESP_LOGD(TAG, "Port %d: Maximum power budget is %dW, raw budget is %dW", id_,
-           max_power_budget, power_budget_);
+  ESP_GOTO_ON_ERROR(this->SetMaxPowerBudget(max_power_budget, 0, true, false),
+                    RESET_STATE, TAG,
+                    "Failed to set max power budget for port %d", id_);
 
   // TODO: Add comments to explain the logic here
   if (this->IsOpen() || this->Closing() || this->IsChecking()) {
@@ -394,7 +446,7 @@ bool Port::RestoreInitialPowerBudget() {
   }
   ESP_LOGD(TAG, "Port %d: Restoring to initial power budget %dW", id_,
            initial_power_budget_);
-  return SetMaxPowerBudget(initial_power_budget_);
+  return SetMaxPowerBudget(initial_power_budget_) == ESP_OK;
 }
 
 esp_err_t Port::Reconnect() {
@@ -414,15 +466,16 @@ RESET_STATE:
   return ret;
 }
 
-void Port::UpdatePowerFeatures(const PowerFeatures &features) {
+esp_err_t Port::UpdatePowerFeatures(const PowerFeatures &features) {
   esp_err_t err = rpc::mcu::set_power_features(id_, features);
   if (err != ESP_OK) {
     ESP_ERROR_COMPLAIN(err, "rpc::mcu::set_power_features(%d)", id_);
     this->SetState(PortStateType::CHECKING);
-    return;
+    return err;
   }
 
   features_ = features;
+  return ESP_OK;
 }
 
 void Port::Shutdown() {
@@ -446,15 +499,11 @@ void Port::EnterPowerLimiting() {
   ESP_LOGW(TAG, "Port %d enter power limiting", id_);
   esp_err_t ret = ESP_OK;
   uint8_t max_power_budget = MinPowerCap();
-  uint8_t set_budget_ = 0;
   ESP_GOTO_ON_ERROR(EnableLimitedCurrentMode(), RESET_STATE, TAG,
                     "EnableLimitedCurrentMode(%d)", id_);
-  ESP_GOTO_ON_ERROR(
-      rpc::mcu::set_max_power_budget(id_, max_power_budget, max_power_budget,
-                                     true, &set_budget_),
-      RESET_STATE, TAG, "rpc::mcu::set_max_power_budget(%d, %d)", id_,
-      max_power_budget);
-  power_budget_ = max_power_budget;
+  ESP_GOTO_ON_ERROR(SetMaxPowerBudget(max_power_budget, 0, true), RESET_STATE,
+                    TAG, "SetMaxPowerBudget(%d, %d) failed", id_,
+                    max_power_budget);
   SetState(PortStateType::POWER_LIMITING);
   return;
 
@@ -502,30 +551,22 @@ void Port::Reboot() {
   ESP_GOTO_ON_FALSE(status == KeepAliveStatus::USER_APPLICATION_ALIVE,
                     ESP_ERR_INVALID_STATE, DEAD_PORT, TAG,
                     "Port %d isn't in user application after bootup", id_);
+#endif
+
+  SetState(PortStateType::ACTIVE);
+  Reinitialize();
+  return;
+
+#ifdef CONFIG_MCU_MODEL_SW3566
 DEAD_PORT:
   ESP_LOGE(TAG, "Port %d boot failed: %d", id_, ret);
   // Port is at unknown state, mark it as dead
   SetState(PortStateType::DEAD);
   return;
-
 #endif
-  Reinitialize();
-  SetState(PortStateType::ACTIVE);
-  return;
 }
 
-void handle_port_config_compatibility(int port, PortConfig &config) {
-  switch (config.version) {
-    case 0: {
-      config.features.EnablePdPPS = port != 0;
-      config.features.EnablePdEPR = port != 0;
-      config.features.reserved = 0;
-      break;
-    }
-  }
-}
-
-bool Port::IsAdjustable() {
+bool Port::IsAdjustable() const {
   bool adjustable_ = false;
   if (!attached_) {
     adjustable_ = true;
@@ -537,4 +578,133 @@ bool Port::IsAdjustable() {
     }
   }
   return adjustable_;
+}
+
+esp_err_t Port::SubscribePDPcapStreaming(bool subscribe) {
+#ifdef CONFIG_MCU_MODEL_SW3566
+  subscriptions_.EnablePDPcapStreaming = subscribe;
+  ESP_RETURN_ON_ERROR(rpc::mcu::set_subscription(id_, subscriptions_), TAG,
+                      "Unable to subscribe to port %d", id_);
+  return ESP_OK;
+#else
+  return ESP_ERR_NOT_SUPPORTED;
+#endif
+}
+
+esp_err_t Port::UnsubscribePDPcapStreaming() {
+#ifdef CONFIG_MCU_MODEL_SW3566
+  if (subscriptions_.EnablePDPcapStreaming) {
+    ESP_LOGI(TAG, "Unsubscribing PD Pcap stream from port %d", id_);
+    subscriptions_.EnablePDPcapStreaming = false;
+    ESP_RETURN_ON_ERROR(rpc::mcu::set_subscription(id_, subscriptions_), TAG,
+                        "Unable to unsubscribe to port %d", id_);
+  }
+#endif
+  return ESP_OK;
+}
+
+PowerFeatures Port::MigrateFeatures(const PortConfig &config) const {
+  PowerFeatures features = {};
+
+  // Directly assign the first byte
+  ((uint8_t *)&features)[0] = ((uint8_t *)&config.features)[0];
+  // Assign the first 7 bits of the second byte
+  SET_BITS(((uint8_t *)&features)[1], 7, ((uint8_t *)&config.features)[1]);
+  // Assign the first 4 bits of the third byte
+  SET_BITS(((uint8_t *)&features)[2], 4, ((uint8_t *)&config.features)[2]);
+
+  if (config.version == 0) {
+    features.EnablePdLVPPS = !this->IsTypeA();
+    features.EnablePdHVPPS = !this->IsTypeA();
+    features.EnablePdEPR = !this->IsTypeA();
+    features.reserved = 0;
+  }
+  return features;
+}
+
+esp_err_t Port::SetConfig(const PortConfig &config) {
+  ESP_RETURN_ON_ERROR(this->UpdatePowerFeatures(this->MigrateFeatures(config)),
+                      TAG, "Unable to set power features for port %d", id_);
+  ESP_RETURN_ON_ERROR(this->Reconnect(), TAG, "Unable to reconnect port %d",
+                      id_);
+  this->Open();
+  return ESP_OK;
+}
+
+esp_err_t Port::ApplyConfig(const PortConfig *config) {
+  if (config != nullptr) {
+    config_ = *config;
+  }
+  return SetConfig(config_);
+}
+
+void Port::GetData(uint8_t *fc_protocol, uint8_t *temperature,
+                   uint16_t *current, uint16_t *voltage) const {
+  bool attached = this->Attached();
+  if (fc_protocol != nullptr) {
+    *fc_protocol = attached ? data_.GetFCProtocol()
+                            : static_cast<uint8_t>(FC_NOT_CHARGING);
+  }
+  if (temperature != nullptr) {
+    *temperature = attached ? data_.GetTemperature() : 0;
+  }
+  if (current != nullptr) {
+    *current = attached ? data_.GetCurrent() : 0;
+  }
+  if (voltage != nullptr) {
+    *voltage = attached ? data_.GetVoltage() : 0;
+  }
+}
+
+esp_err_t Port::ResetConfig() {
+  PortConfig config;
+  if (IsTypeA()) {
+    config = default_port_a_config;
+  } else {
+    config = default_port_config;
+  }
+  return ApplyConfig(&config);
+}
+
+esp_err_t Port::SetPortType(PortType type) {
+#ifdef CONFIG_MCU_MODEL_SW3566
+  SystemFlags new_flags = system_flags_;
+  new_flags.port_type = static_cast<uint8_t>(type);
+  new_flags.commit = 0x55;
+  esp_err_t err = rpc::mcu::set_system_flags(id_, &new_flags);
+  if (err != ESP_OK) {
+    ESP_ERROR_COMPLAIN(err, "rpc::mcu::set_system_flags(%d)", id_);
+    this->SetState(PortStateType::CHECKING);
+    return err;
+  }
+  system_flags_ = new_flags;
+  system_flags_.commit = 0;
+#endif
+  return ESP_OK;
+}
+
+bool Port::Attach() {
+  if (!IsOpen()) {
+    return false;
+  }
+  if (Attached()) {
+    return true;
+  }
+  this->Reset();
+  attached_ = true;
+  attached_at_ = esp_timer_get_time() / 1e3;
+  SetState(PortStateType::ATTACHED);
+  return true;
+}
+
+bool Port::Detach() {
+  if (!IsOpen()) {
+    return false;
+  }
+  if (!Attached()) {
+    return true;
+  }
+  this->Reset();
+  SetState(PortStateType::ACTIVE);
+  return true;
 }

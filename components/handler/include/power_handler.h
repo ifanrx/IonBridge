@@ -5,69 +5,62 @@
 
 #include <vector>
 
-#include "app.h"
 #include "esp_err.h"
 
 namespace PowerHandler {
-esp_err_t TogglePortPower(AppContext &ctx, const std::vector<uint8_t> &request,
+esp_err_t TogglePortPower(const std::vector<uint8_t> &request,
                           std::vector<uint8_t> &response);
-esp_err_t GetPowerStats(AppContext &ctx, const std::vector<uint8_t> &request,
+esp_err_t GetPowerStats(const std::vector<uint8_t> &request,
                         std::vector<uint8_t> &response);
-esp_err_t GetPowerHistoricalStats(AppContext &ctx,
-                                  const std::vector<uint8_t> &request,
+esp_err_t GetPowerHistoricalStats(const std::vector<uint8_t> &request,
                                   std::vector<uint8_t> &response);
-esp_err_t GetPowerSupplyStatus(AppContext &ctx,
-                               const std::vector<uint8_t> &request,
+esp_err_t GetPowerSupplyStatus(const std::vector<uint8_t> &request,
                                std::vector<uint8_t> &response);
-esp_err_t GetChargingStatus(AppContext &ctx,
-                            const std::vector<uint8_t> &request,
+esp_err_t GetChargingStatus(const std::vector<uint8_t> &request,
                             std::vector<uint8_t> &response);
-esp_err_t SetChargingStrategy(AppContext &ctx,
-                              const std::vector<uint8_t> &request,
+esp_err_t SetChargingStrategy(const std::vector<uint8_t> &request,
                               std::vector<uint8_t> &response);
-esp_err_t SetPortPriority(AppContext &ctx, const std::vector<uint8_t> &request,
+esp_err_t SetPortPriority(const std::vector<uint8_t> &request,
                           std::vector<uint8_t> &response);
-esp_err_t GetPortPriority(AppContext &ctx, const std::vector<uint8_t> &request,
+esp_err_t GetPortPriority(const std::vector<uint8_t> &request,
                           std::vector<uint8_t> &response);
-esp_err_t GetSlowChargingModeStatus(AppContext &ctx,
-                                    const std::vector<uint8_t> &request,
+esp_err_t GetSlowChargingModeStatus(const std::vector<uint8_t> &request,
                                     std::vector<uint8_t> &response);
-esp_err_t GetChargingStrategy(AppContext &ctx,
-                              const std::vector<uint8_t> &request,
+esp_err_t GetChargingStrategy(const std::vector<uint8_t> &request,
                               std::vector<uint8_t> &response);
-esp_err_t GetPortPDStatus(AppContext &ctx, const std::vector<uint8_t> &request,
+esp_err_t GetPortPDStatus(const std::vector<uint8_t> &request,
                           std::vector<uint8_t> &response);
-esp_err_t GetAllPowerStats(AppContext &ctx, const std::vector<uint8_t> &request,
+esp_err_t GetAllPowerStats(const std::vector<uint8_t> &request,
                            std::vector<uint8_t> &response);
-esp_err_t GetStartChargeTimestamp(AppContext &ctx,
-                                  const std::vector<uint8_t> &request,
+esp_err_t GetStartChargeTimestamp(const std::vector<uint8_t> &request,
                                   std::vector<uint8_t> &response);
-esp_err_t TurnOnPort(AppContext &ctx, const std::vector<uint8_t> &request,
+esp_err_t TurnOnPort(const std::vector<uint8_t> &request,
                      std::vector<uint8_t> &response);
-esp_err_t TurnOffPort(AppContext &ctx, const std::vector<uint8_t> &request,
+esp_err_t TurnOffPort(const std::vector<uint8_t> &request,
                       std::vector<uint8_t> &response);
-esp_err_t SetStaticAllocator(AppContext &ctx,
-                             const std::vector<uint8_t> &request,
+esp_err_t ForwardPort(const std::vector<uint8_t> &request,
+                      std::vector<uint8_t> &response);
+esp_err_t SetStaticAllocator(const std::vector<uint8_t> &request,
                              std::vector<uint8_t> &response);
-esp_err_t GetStaticAllocator(AppContext &ctx,
-                             const std::vector<uint8_t> &request,
+esp_err_t GetStaticAllocator(const std::vector<uint8_t> &request,
                              std::vector<uint8_t> &response);
-esp_err_t SetPortConfig(AppContext &ctx, const std::vector<uint8_t> &request,
+esp_err_t SetPortConfig(const std::vector<uint8_t> &request,
                         std::vector<uint8_t> &response);
-esp_err_t GetPortConfig(AppContext &ctx, const std::vector<uint8_t> &request,
+esp_err_t GetPortConfig(const std::vector<uint8_t> &request,
                         std::vector<uint8_t> &response);
-esp_err_t SetPortCompatibilitySettings(AppContext &ctx,
-                                       const std::vector<uint8_t> &request,
+esp_err_t SetPortCompatibilitySettings(const std::vector<uint8_t> &request,
                                        std::vector<uint8_t> &response);
-esp_err_t GetPortCompatibilitySettings(AppContext &ctx,
-                                       const std::vector<uint8_t> &request,
+esp_err_t GetPortCompatibilitySettings(const std::vector<uint8_t> &request,
                                        std::vector<uint8_t> &response);
-esp_err_t SetTemperatureMode(AppContext &ctx,
-                             const std::vector<uint8_t> &request,
+esp_err_t SetTemperatureMode(const std::vector<uint8_t> &request,
                              std::vector<uint8_t> &response);
-esp_err_t SetTemporaryAllocator(AppContext &ctx,
-                                const std::vector<uint8_t> &request,
+esp_err_t SetTemporaryAllocator(const std::vector<uint8_t> &request,
                                 std::vector<uint8_t> &response);
+
+esp_err_t SubscribePDPcapStreaming(const std::vector<uint8_t> &request,
+                                   std::vector<uint8_t> &response);
+esp_err_t SetPortType(const std::vector<uint8_t> &request,
+                      std::vector<uint8_t> &response);
 };  // namespace PowerHandler
 
 #endif

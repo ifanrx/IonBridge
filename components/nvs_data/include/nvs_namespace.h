@@ -207,6 +207,10 @@ class NVSNamespace {
   NVSNamespace::SSet(__VA_ARGS__, USER_DATA_NVS_PARTITION, \
                      BLE_SERVICE_NAMESPACE)
 
+#define DisplayNVSGet(...)                                 \
+  NVSNamespace::SGet(__VA_ARGS__, USER_DATA_NVS_PARTITION, \
+                     DISPLAY_DATA_NVS_NAMESPACE)
+
 #define DisplayNVSGetOrDefault(...)                                 \
   NVSNamespace::SGetOrDefault(__VA_ARGS__, USER_DATA_NVS_PARTITION, \
                               DISPLAY_DATA_NVS_NAMESPACE)

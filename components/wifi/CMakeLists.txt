@@ -4,16 +4,17 @@ idf_component_register(
   ${SRCS_FILES}
   INCLUDE_DIRS
   "include"
+  REQUIRES
+  esp_wifi
   PRIV_REQUIRES
-  animation
-  app
+  display
   ble
   controller
   esp_event
   esp_http_client
-  esp_wifi
   logging
   lwip
+  machine_info
   mqtt_app
   nvs_data
   utils

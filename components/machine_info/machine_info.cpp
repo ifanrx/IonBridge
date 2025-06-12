@@ -8,7 +8,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <sstream>
 
 #include "esp_check.h"
 #include "esp_err.h"
@@ -29,18 +28,19 @@ MachineInfo& MachineInfo::GetInstance() {
 }
 
 MachineInfo::MachineInfo()
-    : psn_(""),
+    : psn_("UNK"),
       ble_mac_{},
       wifi_mac_{},
-      hwrev_(""),
-      device_model_(""),
-      product_family_(""),
+      hwrev_("UNK"),
+      device_model_("UNK"),
+      product_family_("UNK"),
       pin_{},
       esp32_version_{},
       mcu_version_{},
       fpga_version_{},
       zrlib_version_{},
-      country_code_{} {}
+      country_code_{},
+      mdns_hostname_("") {}
 
 const std::string& MachineInfo::GetPSN() const { return psn_; }
 
@@ -80,27 +80,51 @@ const std::array<uint8_t, 3>& MachineInfo::GetZRLIBVersion() const {
   return zrlib_version_;
 }
 
+bool MachineInfo::IsInChina() const {
+  return (country_code_ == WIFI_COUNTRY_CN ||
+          country_code_ == WIFI_COUNTRY_UNKNOWN);
+}
+
+bool MachineInfo::IsValidCountryCode() const {
+  return !(country_code_ == WIFI_COUNTRY_UNKNOWN);
+}
+
+esp_err_t MachineInfo::SetCountryCode(std::string country_code) {
+  country_code_ = (country_code.find_first_not_of('\0') == std::string::npos)
+                      ? WIFI_COUNTRY_UNKNOWN
+                      : country_code;
+  return ESP_OK;
+}
+
 const std::string& MachineInfo::GetCountryCode() const { return country_code_; }
+
+const std::string& MachineInfo::GetMDNSHostname() const {
+  return mdns_hostname_;
+}
 
 // Formats the version number into "a.b.c" format
 std::string MachineInfo::FormatVersion(
     const std::array<uint8_t, 3>& version) const {
-  std::ostringstream oss;
-  oss << static_cast<int>(version[0]) << "." << static_cast<int>(version[1])
-      << "." << static_cast<int>(version[2]);
-  return oss.str();
+  char buffer[16];
+  snprintf(buffer, sizeof(buffer), "%d.%d.%d", static_cast<int>(version[0]),
+           static_cast<int>(version[1]), static_cast<int>(version[2]));
+  return std::string(buffer);
 }
 
 esp_err_t MachineInfo::LoadFromStorage() {
+  ESP_ERROR_COMPLAIN(ReadVersion(), "read_version");
+  ESP_ERROR_COMPLAIN(ReadMAC(), "read_mac");
+
+  // Read from NVS, return on error instead of complaining to prevent
+  // corruption
   ESP_RETURN_ON_ERROR(ReadPSN(), TAG, "read_psn");
-  ESP_RETURN_ON_ERROR(ReadMAC(), TAG, "read_mac");
+  ReadMDNSHostname();  // should not be error
   ESP_RETURN_ON_ERROR(ReadHWRev(), TAG, "read_hw_rev");
   ESP_RETURN_ON_ERROR(ReadDeviceModel(), TAG, "read_device_model");
   ESP_RETURN_ON_ERROR(ReadDeviceName(), TAG, "read_device_name");
   ESP_RETURN_ON_ERROR(ReadProductFamily(), TAG, "read_product_family");
   ESP_RETURN_ON_ERROR(ReadProductColor(), TAG, "read_product_color");
   ESP_RETURN_ON_ERROR(ReadPIN(), TAG, "read_pin");
-  ESP_RETURN_ON_ERROR(ReadVersion(), TAG, "read_version");
   return ESP_OK;
 }
 
@@ -116,21 +140,26 @@ void MachineInfo::PrintInfo() const {
   ESP_LOGI(TAG, "PIN: %d %d %d %d", pin_[0], pin_[1], pin_[2], pin_[3]);
   ESP_LOGI(TAG, "ESP32: %s", FormatVersion(esp32_version_).c_str());
   ESP_LOGI(TAG, "MCU: %s", FormatVersion(mcu_version_).c_str());
+#if defined(CONFIG_MCU_MODEL_SW3566) || defined(CONFIG_MCU_MODEL_FAKE_SW3566)
   ESP_LOGI(TAG, "FPGA: %s", FormatVersion(fpga_version_).c_str());
   ESP_LOGI(TAG, "ZRLib: %s", FormatVersion(zrlib_version_).c_str());
+#endif
   ESP_LOGI(TAG, "Current Country: %s", country_code_.c_str());
+  ESP_LOGI(TAG, "mDNS Hostname: %s", mdns_hostname_.c_str());
 }
 
 std::string MachineInfo::FormatAsHTMLTable() const {
-  std::ostringstream oss;
-  oss << "<table>";
+  std::string html;
+  html.reserve(1024);  // Pre-allocate to reduce reallocations
+  html.append("<table>");
 
-  // Helper lambda to add a table row
-  auto addRow = [&](const std::string& field, const std::string& value) {
-    oss << "<tr>"
-        << "<th>" << field << "</th>"
-        << "<td>" << value << "</td>"
-        << "</tr>";
+  // Helper function to add a table row
+  auto addRow = [&html](const std::string& field, const std::string& value) {
+    html.append("<tr><th>");
+    html.append(field);
+    html.append("</th><td>");
+    html.append(value);
+    html.append("</td></tr>");
   };
 
   addRow("PSN", psn_);
@@ -142,26 +171,24 @@ std::string MachineInfo::FormatAsHTMLTable() const {
   addRow("Product Family", product_family_);
   addRow("Product Color", product_color_);
 
-  // Formatting PIN as space-separated values
-  std::ostringstream pinStream;
+  // Format PIN as space-separated values
+  std::string pinStr;
+  pinStr.reserve(8);
   for (int i = 0; i < 4; ++i) {
-    pinStream << pin_[i] + '\0';
-    if (i < 3) pinStream << " ";
+    pinStr += std::to_string(pin_[i]);
+    if (i < 3) pinStr += " ";
   }
-  addRow("PIN", pinStream.str());
+  addRow("PIN", pinStr);
 
   addRow("ESP32 Version", FormatVersion(esp32_version_));
   addRow("MCU Version", FormatVersion(mcu_version_));
   addRow("FPGA Version", FormatVersion(fpga_version_));
   addRow("ZRLib Version", FormatVersion(zrlib_version_));
   addRow("Current Country", country_code_);
+  addRow("mDNS Hostname", mdns_hostname_);
 
-  oss << "</table>";
-  return oss.str();
-}
-
-bool MachineInfo::IsChina() const {
-  return (country_code_ == "CN" || country_code_.empty());
+  html.append("</table>");
+  return html;
 }
 
 esp_err_t MachineInfo::ReadPSN() {
@@ -387,6 +414,11 @@ esp_err_t MachineInfo::ReadVersion() {
   return ESP_OK;
 }
 
+esp_err_t MachineInfo::ReadMDNSHostname() {
+  mdns_hostname_ = "cp02-" + psn_;
+  return ESP_OK;
+}
+
 uint8_t MachineInfo::GetDeviceModelEnumVal() const {
   if (device_model_.compare("pro") == 0) {
     return 0x01;
@@ -424,9 +456,4 @@ uint8_t MachineInfo::GetProductColorEnumVal() const {
     return 0x03;
   }
   return 0x00;  // No product color
-}
-
-esp_err_t MachineInfo::SetCountryCode(std::string country_code) {
-  country_code_ = country_code;
-  return ESP_OK;
 }

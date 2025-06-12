@@ -9,22 +9,14 @@
 #include <utility>
 #include <vector>
 
+#include "controller.h"
 #include "esp_err.h"
 #include "esp_log.h"
 #include "ionbridge.h"
-#include "mqtt_app.h"
-#include "mqtt_message.h"
+#include "power_allocator.h"
 #include "service.h"
 
 static const char *TAG = "App";
-
-AppContext::AppContext(DeviceController &controller, PowerAllocator &pAllocator)
-    : controller(controller), pAllocator(pAllocator) {}
-
-void App::Init(DeviceController &controller, PowerAllocator &pAllocator) {
-  m_ctx = std::make_unique<AppContext>(controller, pAllocator);
-  is_initialized = true;
-}
 
 void App::Srv(ServiceCommand command, SrvFunc func, ServiceScope scope) {
   switch (scope) {
@@ -44,10 +36,6 @@ void App::Srv(ServiceCommand command, SrvFunc func, ServiceScope scope) {
 }
 
 bool App::HasSrv(uint8_t service, ServiceScope scope) {
-  if (!is_initialized) {
-    ESP_LOGW(TAG, "App is not initialized");
-    return false;
-  }
   ServiceCommand command = static_cast<ServiceCommand>(service);
   switch (scope) {
     case ServiceScope::SERVICE_SCOPE_BLE:
@@ -63,14 +51,11 @@ bool App::HasSrv(uint8_t service, ServiceScope scope) {
 }
 
 ResponseStatus App::PreCheckSrv(ServiceCommand command) {
-  if (!is_initialized) {
-    ESP_LOGW(TAG, "App is not initialized");
-    return ResponseStatus::FAILURE;
-  }
   if (!is_service_available_at_high_temp(command, true)) {
     return ResponseStatus::FLASH_NOT_WRITABLE_AT_HIGH_TEMPERATURE;
   }
-  if (!m_ctx->controller.is_power_on()) {
+  DeviceController &controller = DeviceController::GetInstance();
+  if (!controller.is_power_on()) {
     switch (command) {
       case ServiceCommand::SET_CHARGING_STRATEGY:
       case ServiceCommand::SET_STATIC_ALLOCATOR:
@@ -86,7 +71,7 @@ ResponseStatus App::PreCheckSrv(ServiceCommand command) {
         break;
     }
   }
-  if (m_ctx->controller.is_waiting_for_confirmation() &&
+  if (controller.is_waiting_for_confirmation() &&
       command == ServiceCommand::START_OTA) {
     ESP_LOGW(
         TAG,
@@ -94,55 +79,21 @@ ResponseStatus App::PreCheckSrv(ServiceCommand command) {
         command);
     return ResponseStatus::FAILURE;
   }
+  // Check if power related commands
+  if (command >= ServiceCommand::TOGGLE_PORT_POWER &&
+      command < ServiceCommand::SET_DISPLAY_INTENSITY &&
+      !PowerAllocator::GetInstance().IsConfigured()) {
+    ESP_LOGE(TAG,
+             "Device power allocator is not configured, disabling "
+             "service 0x%02x",
+             command);
+    return ResponseStatus::FAILURE;
+  }
   return ResponseStatus::SUCCESS;
 }
-void App::ProcessMQTTMessage(const char *data, int length) {
-#define HEADER_SIZE 3
 
-  if (length < HEADER_SIZE) {
-    // The data must contain at least the service identifier
-    ESP_LOGW(TAG, "Invalid data length: %d", length);
-    return;
-  }
-
-  // Extract the service identifier (assumes it's the first byte)
-  uint8_t service = data[0];
-  uint16_t message_id = (data[2] << 8) | data[1];
-
-  // Encapsulate request and response into vectors to prevent out-of-bound
-  // issues, then pass them to business logic handlers
-  std::vector<uint8_t> request(data + HEADER_SIZE, data + length);
-  std::vector<uint8_t> response{};
-  ESP_LOGD(TAG, "MQTT Message received, service: 0x%02x", service);
-  ExecSrvFromMQTT(service, request, response);
-
-  // Push the result
-  uint16_t telemetryService = data[0];
-  MQTTMessageHeader header = {telemetryService, message_id};
-  std::vector<uint8_t> responseInBytes = header.serialize();
-  responseInBytes.insert(responseInBytes.end(), response.begin(),
-                         response.end());
-
-  if (response.empty()) {
-    ESP_LOGW(TAG, "MQTT Message response is empty");
-    return;
-  }
-
-  MQTTClient::GetInstance()->Publish(responseInBytes);
-  ESP_LOGD(TAG, "MQTT Message sent, service: 0x%02x, status: %d",
-           telemetryService, response[0]);
-
-#undef HEADER_SIZE
-}
-
-void App::ExecSrvFromMQTT(uint8_t service, std::vector<uint8_t> &request,
+void App::ExecSrvFromMQTT(uint8_t service, const std::vector<uint8_t> &request,
                           std::vector<uint8_t> &response) {
-  if (!is_initialized) {
-    ESP_LOGW(TAG, "App is not initialized");
-    response.emplace_back(ResponseStatus::FAILURE);
-    return;
-  }
-
   // Retrieve the appropriate handler from the service mapping
   ServiceCommand command = static_cast<ServiceCommand>(service);
 
@@ -161,7 +112,7 @@ void App::ExecSrvFromMQTT(uint8_t service, std::vector<uint8_t> &request,
 
   // Obtain the corresponding handler
   auto handler = m_mqtt_services.at(command);
-  esp_err_t err = handler(*m_ctx, request, response);
+  esp_err_t err = handler(request, response);
   if (err != ESP_OK) {
     ESP_ERROR_COMPLAIN(err, "Failed to execute MQTT App service 0x%02x",
                        service);
@@ -181,12 +132,6 @@ void App::ExecSrvFromMQTT(uint8_t service, std::vector<uint8_t> &request,
 size_t App::ExecSrvFromBle(uint8_t service, uint8_t *payload,
                            size_t payloadSize, uint8_t *response,
                            size_t responseSize) {
-  if (!is_initialized) {
-    ESP_LOGW(TAG, "App is not initialized");
-    response[0] = ResponseStatus::FAILURE;
-    return 1;
-  }
-
   // Retrieve the handler from the service mapping
   ServiceCommand command = static_cast<ServiceCommand>(service);
 
@@ -199,6 +144,7 @@ size_t App::ExecSrvFromBle(uint8_t service, uint8_t *payload,
 
   ResponseStatus res = PreCheckSrv(command);
   if (res != ResponseStatus::SUCCESS) {
+    ESP_LOGW(TAG, "Service 0x%02x is disabled", service);
     response[0] = res;
     return 1;
   }
@@ -210,12 +156,14 @@ size_t App::ExecSrvFromBle(uint8_t service, uint8_t *payload,
   // passing them to the business logic handlers
   std::vector<uint8_t> request(payload, payload + payloadSize);
   std::vector<uint8_t> data{};
-  esp_err_t err = handler(*m_ctx, request, data);
+  esp_err_t err = handler(request, data);
 
   // Check if the response size is too large; truncate if necessary
   if (data.size() > responseSize) {
+#ifndef CONFIG_IDF_TARGET_LINUX
     ESP_LOGW(TAG, "Response too large: received %d, expected <= %d",
              data.size(), responseSize);
+#endif
     data.resize(responseSize);
   }
 

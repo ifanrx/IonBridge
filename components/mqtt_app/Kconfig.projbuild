@@ -1,56 +1,43 @@
 menu "MQTT App Configuration"
 
-config ENABLE_MQTT
-    bool "Enable MQTT"
-    default n
-    help
-        Enable MQTT.
-
 config ENABLE_MQTT_TLS
     bool "Enable MQTT TLS"
-    depends on ENABLE_MQTT
     default n
     help
         Enable MQTT TLS support.
 
 config MQTT_APP_URI
     string "MQTT Broker URI"
-    depends on ENABLE_MQTT
     default "mqtt://localhost:1883"
     help
         The URI of the MQTT broker to connect to.
 
 config MQTT_APP_FALLBACK_URI
     string "MQTT Broker fallback URI"
-    depends on ENABLE_MQTT
     default "mqtt://localhost:1883"
     help
         The fallback URI of the MQTT broker to connect to.
 
 config MQTT_APP_HOSTNAME
     string "MQTT Broker HOSTNAME"
-    depends on ENABLE_MQTT
     default "localhost"
     help
         The HOSTNAME of the MQTT broker to connect to.
 
 config MQTT_MAX_RECONNECT_ATTEMPTS
     int "MQTT MAX RECONNECT ATTEMPTS"
-    depends on ENABLE_MQTT
     default 10
     help
         Max reconnect attempts(doubled because counter will increase in both disconnect and error event)
 
 config MQTT_MEMORY_DEBUG
     bool "Enable MQTT Memory Debugging"
-    depends on ENABLE_MQTT
     default n
     help
         Enable MQTT Memory Debugging Logs.
 
 choice
     prompt "Select MQTT Protocol Version"
-    depends on ENABLE_MQTT
     default MQTT_PROTOCOL_V_5
 
 config MQTT_PROTOCOL_V_3_1

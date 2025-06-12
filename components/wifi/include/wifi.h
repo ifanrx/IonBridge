@@ -58,13 +58,13 @@ size_t serialize_ssid_detail(const ssid_detail_t *ssid_detail, uint8_t *buf,
 bool wifi_is_connected();
 esp_err_t wifi_close();
 
-#ifdef __cplusplus
-}
-#endif
-
 void get_ipv4_addr(uint8_t *data);
 #ifdef CONFIG_LWIP_IPV6
 void get_ipv6_addr(uint8_t *data);
+#endif
+
+#ifdef __cplusplus
+}
 #endif
 
 class WiFiController {
@@ -77,7 +77,9 @@ class WiFiController {
   static void StartTask();
   static void Run(void *taskParams);
   void SetState(WiFiStateType type);
-  WiFiStateType GetState() { return state_->Type(); }
+  WiFiStateType GetStateType() { return state_->Type(); }
+  const WiFiState *GetState() { return state_; }
+  std::string GetStateString() { return state_->ToString(); }
   void Loop();
   void Notify(WiFiEventType event, bool overwrite = true);
 
@@ -96,13 +98,14 @@ class WiFiController {
       case WiFiStateType::CONNECTING:
       case WiFiStateType::CONNECTED:
       case WiFiStateType::CHECKING_CONN:
-      case WiFiStateType::STARTING_MQTT:
       case WiFiStateType::IDLE:
         return true;
       default:
         return false;
     }
   };
+
+  bool ResolveAddress(const char *hostname);
 };
 
 extern WiFiController wifi_controller;

@@ -170,7 +170,7 @@ menu "UART Configuration"
 
     config UART_EVENT_TASK_PRIORITY
         int "UART Event Task Priority"
-        default 23
+        default 22
         range 1 23
         help
             This configuration defines the priority of the UART event task. The UART event task

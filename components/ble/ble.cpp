@@ -1,5 +1,6 @@
 #include "ble.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <queue>
@@ -7,13 +8,22 @@
 #include <vector>
 
 #include "NimBLEAdvertising.h"
+#include "NimBLEAttValue.h"
 #include "NimBLECharacteristic.h"
+#include "NimBLEConnInfo.h"
 #include "NimBLEDevice.h"
-#include "animation.h"
+#include "NimBLELocalValueAttribute.h"
+#include "NimBLEServer.h"
+#include "NimBLEService.h"
+#include "NimBLEUUID.h"
+#include "NimBLEUtils.h"
 #include "ble_callbacks.h"
+#include "display_animation.h"
+#include "display_manager.h"
 #include "esp_check.h"
 #include "esp_err.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/idf_additions.h"
 #include "freertos/projdefs.h"
 #include "host/ble_gap.h"
@@ -25,6 +35,10 @@
 #include "utils.h"
 #include "wifi.h"
 #include "wifi_state.h"
+
+#ifdef CONFIG_ENABLE_BLE_AND_MQTT_MUTUAL_EXCLUSION
+#include "wifi.h"
+#endif
 
 #define BLE_ATT_MTU CONFIG_BLE_ATT_MTU
 #define SERVICE_UUID CONFIG_SERVICE_UUID
@@ -45,30 +59,31 @@ typedef std::queue<std::vector<uint8_t>> BLEMessagesQueue;
 static NimBLEUUID serviceUUID(SERVICE_UUID);
 static NimBLEUUID rxCharUUID(CHARACTERISTIC_UUID_RX);
 static NimBLEUUID txCharUUID(CHARACTERISTIC_UUID_TX);
-static NimBLEServer *pServer;
-static NimBLECharacteristic *pCharacteristicTX;
-static NimBLECharacteristic *pCharacteristicRX;
+static NimBLEServer *pServer = nullptr;
+static NimBLECharacteristic *pCharacteristicTX = nullptr;
+static NimBLECharacteristic *pCharacteristicRX = nullptr;
+static CharacteristicCallbacks *callbacks = nullptr;
+
 static std::string clientAddress = "";
 static bool deviceConnected = false;
 static uint16_t peerMTU = 23, connTimeout = 120;
 static BLEMessagesQueue bleMessagesQueue;
 static uint16_t deviceConnHandle = 0;
-static CharacteristicCallbacks *callbacks = new CharacteristicCallbacks();
 
-typedef enum {
+enum BLE_ADV_STATE : uint8_t {
   BLE_ADV_START,
   BLE_ADV_STOP,
   BLE_ADV_DELAY_START,
-  BLE_ADV_DELAY_START_LIMITED_DURATION,
-} BLE_ADV_STATE;
+};
 
-static TaskHandle_t bleAdvTaskHandle = NULL;
-static TimerHandle_t bleAdvTimer;
-static BLE_ADV_STATE bleAdvState = BLE_ADV_STOP;
-static void start_ble_adv_timer(int interval_ms, int adv_duration_ms);
-static void stop_ble_adv_timer();
-static void ble_adv_timer_callback(TimerHandle_t xTimer);
+static TaskHandle_t bleAdvTaskHandle = NULL, bleMsgTaskHandle = NULL;
+static BLE_ADV_STATE bleAdvCurrState = BLE_ADV_STOP;
 static void ble_adv_task(void *arg);
+static void ble_msg_task(void *arg);
+
+static BLE_ADV_STATE handle_ble_adv_start();
+static BLE_ADV_STATE handle_ble_adv_stop();
+static BLE_ADV_STATE handle_ble_adv_delay_start(int interval_ms);
 
 void ServerCallbacks::onConnect(NimBLEServer *pServer,
                                 NimBLEConnInfo &connInfo) {
@@ -97,8 +112,8 @@ void ServerCallbacks::onConnect(NimBLEServer *pServer,
 
   peerMTU = pServer->getPeerMTU(connHandle);
   ESP_LOGI(TAG, "Peer MTU: %d", peerMTU);
-  AnimationController::GetInstance().StartAnimation(AnimationId::BLE_CONNECTED,
-                                                    true);
+  DisplayManager::GetInstance().SetAnimation(AnimationType::BLE_CONNECTED,
+                                             true);
 }
 
 void ServerCallbacks::onDisconnect(NimBLEServer *pServer,
@@ -111,7 +126,8 @@ void ServerCallbacks::onDisconnect(NimBLEServer *pServer,
   ESP_LOGD(TAG, "MTU size: %d bytes", connInfo.getMTU());
   deviceConnected = false;
   clientAddress.clear();
-  AnimationController::GetInstance().StopAnimation(AnimationId::BLE_CONNECTED);
+  DisplayManager::GetInstance().SetAnimation(AnimationType::IDLE_ANIMATION,
+                                             true);
 }
 
 void ServerCallbacks::onMTUChange(uint16_t mtu, NimBLEConnInfo &connInfo) {
@@ -213,6 +229,15 @@ esp_err_t ble_init() {
     return ESP_OK;
   }
 
+#ifdef CONFIG_ENABLE_BLE_AND_MQTT_MUTUAL_EXCLUSION
+  if (wifi_controller.GetStateType() == WiFiStateType::IDLE) {
+    wifi_controller.Notify(WiFiEventType::ABORT);
+    // WiFi abort handling will initialize BLE separately,
+    // so return error to avoid duplicate initialization
+    return ESP_ERR_INVALID_STATE;
+  }
+#endif
+
   esp_err_t __attribute__((unused)) ret;
   deviceConnected = false;
   NimBLEService *service;
@@ -247,8 +272,9 @@ esp_err_t ble_init() {
   }
   pServer->advertiseOnDisconnect(true);
   // callback class will be deleted when server is destructed.
-  pServer->setCallbacks(new ServerCallbacks());
+  pServer->setCallbacks(new ServerCallbacks(), true);
 
+  // service would be deleted when server is destructed.
   service = pServer->createService(serviceUUID);
   if (!service) {
     ESP_LOGE(TAG, "Failed to create the BLE service for %s",
@@ -256,6 +282,7 @@ esp_err_t ble_init() {
     return ESP_ERR_INVALID_VERSION;
   }
 
+  // characteristic would be deleted when service is destructed.
   pCharacteristicTX = service->createCharacteristic(
       txCharUUID, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
   pCharacteristicRX = service->createCharacteristic(
@@ -264,6 +291,8 @@ esp_err_t ble_init() {
     ESP_LOGE(TAG, "Failed to create the BLE characteristics");
     return ESP_ERR_INVALID_MAC;
   }
+
+  callbacks = new CharacteristicCallbacks();
   pCharacteristicTX->setCallbacks(callbacks);
   pCharacteristicRX->setCallbacks(callbacks);
 
@@ -273,26 +302,36 @@ esp_err_t ble_init() {
   }
   pServer->start();
 
+  // pAdvertising would be deleted after calling NimBLEDevice::deinit()
   NimBLEAdvertising *pAdvertising = pServer->getAdvertising();
   if (pAdvertising == nullptr) {
     ESP_LOGE(TAG, "pServer->getAdvertising failed");
     return ESP_ERR_INVALID_ARG;
   }
 
-  get_ble_mac_address(deviceAddr);
+  memcpy(deviceAddr,
+         NimBLEDevice::getAddress().reverseByteOrder().getBase()->val, 6);
   // copy last 3 bytes of MAC to fit in adv data
   memcpy(manufacturer_data + 2, deviceAddr + 3, 3);
   manufacturer_data[5] = MachineInfo::GetInstance().GetProductFamilyEnumVal();
   manufacturer_data[6] = MachineInfo::GetInstance().GetDeviceModelEnumVal();
   manufacturer_data[7] = MachineInfo::GetInstance().GetProductColorEnumVal();
-
   pAdvertising->setManufacturerData(std::vector<uint8_t>(
       manufacturer_data, manufacturer_data + sizeof(manufacturer_data)));
+
   pAdvertising->setName(deviceName);
   pAdvertising->enableScanResponse(true);
   pAdvertising->addServiceUUID(service->getUUID());
   ble_update_adv_interval();
   ESP_LOGI(TAG, "BLE initialized");
+
+  if (bleMsgTaskHandle == NULL) {
+    ret = xTaskCreate(ble_msg_task, "ble_msg", CONFIG_BLE_TASK_STACK_SIZE,
+                      nullptr, 1, &bleMsgTaskHandle);
+    ESP_RETURN_ON_FALSE(ret == pdPASS, ESP_FAIL, TAG,
+                        "Failed to create BLE message task");
+  }
+
   return ESP_OK;
 }
 
@@ -301,17 +340,47 @@ esp_err_t ble_deinit() {
     return ESP_OK;
   }
 
-  ESP_RETURN_ON_FALSE(pServer->stopAdvertising(), ESP_FAIL, TAG,
-                      "Failed to stop Advertising");
+  if (bleMsgTaskHandle != nullptr) {
+    // Store handle in temporary variable
+    TaskHandle_t tempHandle = bleMsgTaskHandle;
+
+    // Signal task to exit
+    xTaskNotify(tempHandle, 0, eNoAction);
+
+    // Wait briefly to allow task to start cleanup
+    vTaskDelay(pdMS_TO_TICKS(100));
+
+    // Only now clear the global handle
+    bleMsgTaskHandle = nullptr;
+  }
+  while (!bleMessagesQueue.empty()) {
+    bleMessagesQueue.pop();
+  }
+
+  if (pServer) {
+    ESP_RETURN_ON_FALSE(pServer->stopAdvertising(), ESP_FAIL, TAG,
+                        "Failed to stop advertising");
+  }
+
   ESP_RETURN_ON_FALSE(NimBLEDevice::deinit(true), ESP_FAIL, TAG,
                       "Failed to deinit BLE Device");
   ESP_LOGI(TAG, "BLE deinitialized");
+
+  if (callbacks) {
+    delete callbacks;
+    callbacks = nullptr;
+  }
+  pServer = nullptr;
+  pCharacteristicTX = nullptr;
+  pCharacteristicRX = nullptr;
   deviceConnected = false;
   return ESP_OK;
 }
 
-void handle_ble_messages_task(void *arg) {
-  MessageHandler *msgHandler = new MessageHandler();
+void ble_msg_task(void *arg) {
+  ESP_LOGI(TAG, "BLE message task running");
+  std::unique_ptr<MessageHandler> msgHandler =
+      std::make_unique<MessageHandler>();
   esp_err_t __attribute__((unused)) ret;
   while (true) {
     if (!bleMessagesQueue.empty()) {
@@ -329,21 +398,19 @@ void handle_ble_messages_task(void *arg) {
       delete msg;
     }
   NEXT:
-    DELAY_MS(50);
+    if (xTaskNotifyWait(pdTRUE, pdTRUE, nullptr, pdMS_TO_TICKS(50)) == pdTRUE) {
+      // Received a notification, stop the current loop and exit the task
+      break;
+    }
   }
 
-  delete msgHandler;
+  // Clean up any resources before exiting
+  msgHandler.reset();  // Explicitly clean up the unique_ptr
+  ESP_LOGI(TAG, "BLE message task is exiting");
+  vTaskDelete(NULL);
 }
 
 const char *get_client_address() { return clientAddress.c_str(); }
-
-void get_ble_mac_address(uint8_t *ble_address) {
-  if (ble_address == nullptr) {
-    return;
-  }
-  memcpy(ble_address,
-         NimBLEDevice::getAddress().reverseByteOrder().getBase()->val, 6);
-}
 
 bool ble_start_advertising(bool force) {
   if (ble_is_advertising() && !force) {
@@ -376,141 +443,55 @@ esp_err_t get_ble_conn_rssi(int8_t *rssi) {
 
 uint16_t get_ble_mtu() { return peerMTU; }
 
-bool ble_is_advertising() { return bleAdvState != BLE_ADV_STOP; }
+bool ble_is_advertising() { return bleAdvCurrState != BLE_ADV_STOP; }
 
 bool ble_is_connected() { return deviceConnected; }
 
 void ble_adv_task(void *arg) {
   BaseType_t xResult;
   uint32_t state;
-  BLE_ADV_STATE new_state = BLE_ADV_STOP;
+  BLE_ADV_STATE new_state = BLE_ADV_STOP, next_state = new_state;
+
   while (true) {
     // Wait to be notified from Wi-Fi/MQTT task
-    xResult = xTaskNotifyWait(pdTRUE, pdTRUE, &state, portMAX_DELAY);
-    if (xResult != pdPASS) {
-      ESP_LOGE(TAG, "Failed to wait for notification");
-      continue;
+    xResult = xTaskNotifyWait(pdTRUE, pdTRUE, &state, pdMS_TO_TICKS(10));
+    if (xResult == pdPASS) {
+      new_state = (BLE_ADV_STATE)state;
     }
-    new_state = (BLE_ADV_STATE)state;
-    if (bleAdvState == new_state) {
-      continue;
-    }
-    stop_ble_adv_timer();
+
     switch (new_state) {
       case BLE_ADV_START: {
-        // start advertising indefinitely
-        wifi_controller.Notify(WiFiEventType::STOP_WEB_SERVER);
-        if (ble_init() != ESP_OK || !pServer->startAdvertising()) {
-          ESP_LOGE(TAG, "Failed to start advertising");
-          continue;
-        }
-        AnimationController::GetInstance().StartAnimation(
-            AnimationId::BLE_ADVERTISING, true);
+        next_state = handle_ble_adv_start();
       } break;
       case BLE_ADV_STOP: {
-        // stop advertising immediately
-        if (NimBLEDevice::isInitialized()) {
-          if (deviceConnected && !pServer->disconnect(deviceConnHandle)) {
-            ESP_LOGE(TAG,
-                     "Failed to disconnect from previous device before "
-                     "stopping advertising");
-            continue;
-          }
-#ifdef CONFIG_DEINIT_BLE_ON_STOP_ADVERTISING
-          if (ble_deinit() != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to deinit BLE");
-            continue;
-          }
-#else
-          if (!pServer->stopAdvertising()) {
-            ESP_LOGE(TAG, "Failed to stop advertising");
-            continue;
-          }
-#endif
-        }
-        wifi_controller.Notify(WiFiEventType::START_WEB_SERVER);
-        AnimationController::GetInstance().StopAnimation(
-            AnimationId::BLE_ADVERTISING);
+        next_state = handle_ble_adv_stop();
       } break;
       case BLE_ADV_DELAY_START: {
         // start a timer, and enter "BLE_ADV_START" state after timer triggers
-        if (bleAdvState == BLE_ADV_START) {
-          continue;
-        }
-        start_ble_adv_timer(BLE_ADV_TIMER_INTERVAL_MS, 0);
-      } break;
-      case BLE_ADV_DELAY_START_LIMITED_DURATION: {
-        // same as BLE_ADV_DELAY_START, but only advertise for X seconds, then
-        // enter BLE_ADV_STOP state
-        start_ble_adv_timer(BLE_ADV_TIMER_INTERVAL_MS, BLE_ADV_DURATION_MS);
+        next_state = handle_ble_adv_delay_start(BLE_ADV_TIMER_INTERVAL_MS);
       } break;
       default: {
         ESP_LOGW(TAG, "Invalid BLE adv task state: %" PRIx32, state);
         continue;
       } break;
     }
-    // State changed, cancel all pending actions and perform the new action
-    ESP_LOGI(TAG, "BLE adv task state changed: %d => %d", bleAdvState,
-             new_state);
-    bleAdvState = new_state;
+    if (next_state != bleAdvCurrState) {
+      ESP_LOGI(TAG, "BLE adv task state changed: %d => %d", bleAdvCurrState,
+               next_state);
+      bleAdvCurrState = next_state;
+    }
+    new_state = bleAdvCurrState;
   }
 }
 
 esp_err_t start_ble_adv_task() {
-  BaseType_t res = xTaskCreate(ble_adv_task, "ble_adv", 1024 * 2, nullptr, 5,
+  BaseType_t res = xTaskCreate(ble_adv_task, "ble_adv", 1024 * 3, nullptr, 5,
                                &bleAdvTaskHandle);
   if (res != pdPASS) {
     ESP_LOGE(TAG, "Failed to create BLE adv task");
     return ESP_ERR_NO_MEM;
   }
   return ESP_OK;
-}
-
-void start_ble_adv_timer(int interval_ms, int adv_duration_ms) {
-  if (bleAdvTimer != nullptr) {
-    ESP_LOGW(TAG, "BLE adv timer is already running");
-    return;
-  }
-  bleAdvTimer = xTimerCreate("bleAdvTimer", pdMS_TO_TICKS(interval_ms), pdFALSE,
-                             (void *)adv_duration_ms, ble_adv_timer_callback);
-  if (bleAdvTimer == nullptr) {
-    ESP_LOGE(TAG, "Failed to create BLE adv timer");
-    return;
-  }
-  xTimerStart(bleAdvTimer, 0);
-}
-
-void stop_ble_adv_timer() {
-  if (bleAdvTimer == nullptr) {
-    ESP_LOGD(TAG, "BLE adv timer is not running");
-    return;
-  }
-  xTimerStop(bleAdvTimer, 0);
-  xTimerDelete(bleAdvTimer, 0);
-  bleAdvTimer = nullptr;
-}
-
-void ble_adv_timer_callback(TimerHandle_t xTimer) {
-  wifi_controller.Notify(WiFiEventType::STOP_WEB_SERVER);
-  if (!NimBLEDevice::isInitialized()) {
-    ESP_RETURN_VOID_ON_ERROR(ble_init(), TAG, "Failed to initialize BLE");
-  }
-
-  int adv_duration_ms = (int)pvTimerGetTimerID(xTimer);
-  if (!pServer->startAdvertising(adv_duration_ms)) {
-    ESP_LOGE(TAG, "Failed to start BLE advertising, duration: %d",
-             adv_duration_ms);
-  }
-  ESP_LOGI(TAG, "BLE advertising started, duration: %d", adv_duration_ms);
-  if (adv_duration_ms == 0) {
-    ble_adv_start();
-  } else {
-    DELAY_MS(adv_duration_ms);
-    if (bleAdvState == BLE_ADV_DELAY_START_LIMITED_DURATION) {
-      // stop advertising after duration
-      ble_adv_stop();
-    }
-  }
 }
 
 void ble_adv_start() {
@@ -525,13 +506,91 @@ void ble_adv_delay_start() {
   xTaskNotify(bleAdvTaskHandle, BLE_ADV_DELAY_START, eSetValueWithOverwrite);
 }
 
-void ble_adv_delay_start_limited_duration() {
-  xTaskNotify(bleAdvTaskHandle, BLE_ADV_DELAY_START_LIMITED_DURATION,
-              eSetValueWithOverwrite);
-}
-
 void ble_notify(const uint8_t *data, size_t length) {
   if (NimBLEDevice::isInitialized() && pCharacteristicTX && deviceConnected) {
     pCharacteristicTX->notify(data, length);
   }
+}
+
+// Handle current state transmit to BLE_ADV_START state
+BLE_ADV_STATE handle_ble_adv_start() {
+  if (bleAdvCurrState == BLE_ADV_START) {
+    return bleAdvCurrState;
+  }
+
+  // start advertising indefinitely
+  wifi_controller.Notify(WiFiEventType::STOP_WEB_SERVER);
+  if (ble_init() != ESP_OK || !pServer->startAdvertising()) {
+    ESP_LOGE(TAG, "Failed to start advertising");
+    wifi_controller.Notify(WiFiEventType::START_WEB_SERVER);
+    return bleAdvCurrState;
+  }
+
+  DisplayManager::GetInstance().SetAnimation(AnimationType::BLE_ADVERTISING,
+                                             true);
+  return BLE_ADV_START;
+}
+
+// Handle current state transmit to BLE_ADV_STOP state
+BLE_ADV_STATE handle_ble_adv_stop() {
+  if (bleAdvCurrState == BLE_ADV_STOP) {
+    return bleAdvCurrState;
+  }
+
+  // stop advertising immediately
+  if (NimBLEDevice::isInitialized()) {
+    if (deviceConnected && !pServer->disconnect(deviceConnHandle)) {
+      ESP_LOGE(TAG,
+               "Failed to disconnect from previous device before "
+               "stopping advertising");
+      return bleAdvCurrState;
+    }
+#ifdef CONFIG_DEINIT_BLE_ON_STOP_ADVERTISING
+    if (ble_deinit() != ESP_OK) {
+      ESP_LOGE(TAG, "Failed to deinit BLE");
+      return bleAdvCurrState;
+    }
+#else
+    if (!pServer->stopAdvertising()) {
+      ESP_LOGE(TAG, "Failed to stop advertising");
+      return bleAdvCurrState;
+    }
+#endif
+  }
+
+  wifi_controller.Notify(WiFiEventType::START_WEB_SERVER);
+  DisplayManager::GetInstance().SetAnimation(AnimationType::IDLE_ANIMATION,
+                                             true);
+  return BLE_ADV_STOP;
+}
+
+// Handle current state transmit to BLE_ADV_DELAY_START state
+BLE_ADV_STATE handle_ble_adv_delay_start(int interval_ms) {
+  static int64_t adv_start_at = 0;
+  BLE_ADV_STATE new_state = BLE_ADV_DELAY_START;
+  int64_t now = esp_timer_get_time();
+
+  if (bleAdvCurrState == BLE_ADV_START) {
+    // BLE advertising is already started, so do nothing
+    return BLE_ADV_START;
+  }
+  if (bleAdvCurrState == BLE_ADV_STOP) {
+    // Calculate the time to start advertising
+    adv_start_at = now + interval_ms * 1000;
+  }
+
+  if (now < adv_start_at) {
+    // Stay in the current state until the time to start advertising
+    return new_state;
+  }
+
+  wifi_controller.Notify(WiFiEventType::STOP_WEB_SERVER);
+  if (!(ble_init() == ESP_OK && pServer->startAdvertising())) {
+    ESP_LOGE(TAG, "Failed to start advertising");
+    wifi_controller.Notify(WiFiEventType::START_WEB_SERVER);
+    return new_state;
+  }
+
+  // Keep advertising indefinitely, so return to BLE_ADV_START state
+  return BLE_ADV_START;
 }

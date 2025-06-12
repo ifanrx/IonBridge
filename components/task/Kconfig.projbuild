@@ -1,5 +1,3 @@
-if ENABLE_MQTT
-
 menu "Telemetry Task Configuration"
 
 config TELEMETRY_ENABLED
@@ -83,6 +81,25 @@ config STREAM_PD_STATUS_INTERVAL_MS
     help
         Set the interval in milliseconds for reporting the status of stream PD.
 
-endmenu
+config OVER_TEMP_ALERT_INTERVAL_MS
+    int "Over Temperature Alert Interval (ms)"
+    depends on TELEMETRY_ENABLED
+    default 1000
+    help
+        Set the interval in milliseconds for checking over temperature alerts.
 
-endif
+config TELEMETRY_TASK_STACK_SIZE
+    int "Task Stack Size"
+    depends on TELEMETRY_ENABLED
+    default 2048
+    help
+        Set the stack size for the telemetry task.
+
+config TELEMETRY_TASK_PRIORITY
+    int "Task Priority"
+    depends on TELEMETRY_ENABLED
+    default 18
+    help
+        Set the priority for the telemetry task.
+
+endmenu

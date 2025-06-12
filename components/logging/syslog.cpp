@@ -15,7 +15,6 @@
 #include "nvs_default.h"
 #include "nvs_namespace.h"
 #include "sdkconfig.h"
-#include "wifi.h"
 
 #ifdef CONFIG_ENABLE_REPORT_SYSLOG
 #define ENABLE_REPORT_SYSLOG
@@ -48,9 +47,9 @@ SyslogClient::SyslogClient()
       is_initialized_(false),
       available_(false),
       syslog_mutex_(nullptr),
-      report_enabled_(true) {
+      report_enabled_(true),
+      remote_reporting_(false) {
   std::memset(&dest_addr_struct_, 0, sizeof(dest_addr_struct_));
-  std::memset(&serial_number_, 0, sizeof(serial_number_));
   semaphore_timeout_ = pdMS_TO_TICKS(SYSLOG_SEMAPHORE_TIMEOUT_MS);
 
   const int max_retries = 3;
@@ -83,7 +82,6 @@ esp_err_t SyslogClient::Initialize() {
     return ESP_ERR_INVALID_STATE;
   }
   if (is_initialized_) {
-    INTERNAL_LOG("Syslog client already initialized");
     return ESP_OK;
   }
 
@@ -93,29 +91,14 @@ esp_err_t SyslogClient::Initialize() {
     INTERNAL_LOG("Failed to get syslog report state from NVS, error: %d", ret);
     report_enabled_ = true;
   }
-  const std::string& kSerialNumber = MachineInfo::GetInstance().GetPSN();
-  if (kSerialNumber.empty()) {
-    INTERNAL_LOG("Failed to get serial number");
-    return ESP_FAIL;
-  }
-
-  if (!Initialize(kSerialNumber.c_str(), kSerialNumber.length())) {
-    INTERNAL_LOG("Failed to initialize syslog client");
-    return ESP_FAIL;
-  }
 #endif
   return ESP_OK;
 }
 
-bool SyslogClient::Initialize(const char* serial_number,
-                              size_t serial_number_length) {
+bool SyslogClient::InitializeClient() {
 #ifdef ENABLE_REPORT_SYSLOG
   if (!available_) {
     INTERNAL_LOG("Syslog client not available");
-    return false;
-  }
-
-  if (!wifi_is_connected()) {
     return false;
   }
 
@@ -124,23 +107,15 @@ bool SyslogClient::Initialize(const char* serial_number,
     return true;
   }
 
-  if (serial_number_length > sizeof(serial_number_)) {
-    INTERNAL_LOG("Serial number too long");
-    return false;
-  }
-
   if (xSemaphoreTake(syslog_mutex_, semaphore_timeout_) != pdTRUE) {
     INTERNAL_LOG("Failed to take mutex within %u ms",
                  SYSLOG_SEMAPHORE_TIMEOUT_MS);
     return false;
   }
 
-  std::memcpy(serial_number_, serial_number, serial_number_length);
-  serial_number_[serial_number_length] = '\0';
-
   // Resolve syslog server hostname
   if (!ResolveHost()) {
-    INTERNAL_LOG("Failed to resolve syslog server");
+    INTERNAL_LOG("Failed to resolve Syslog server");
     xSemaphoreGive(syslog_mutex_);
     return false;
   }
@@ -205,8 +180,8 @@ bool SyslogClient::ResolveHost() {
 int SyslogClient::ConstructMessage(char* buffer, size_t buffer_size,
                                    const char* format, va_list args) const {
 #ifdef ENABLE_REPORT_SYSLOG
-  if (buffer == nullptr || buffer_size == 0 || format == nullptr) {
-    INTERNAL_LOG("Invalid arguments");
+  if (buffer == nullptr || buffer_size == 0 || format == nullptr ||
+      strlen(format) < 3) {
     return -1;
   }
 
@@ -215,7 +190,7 @@ int SyslogClient::ConstructMessage(char* buffer, size_t buffer_size,
   MachineInfo& machine_info = MachineInfo::GetInstance();
   int written = snprintf(
       buffer, buffer_size, "<%d>1  - - %s v%s %s/%s ", PRI_VALUE,
-      serial_number_,
+      machine_info.GetPSN().c_str(),
       machine_info.FormatVersion(machine_info.GetESP32Version()).c_str(),
       machine_info.GetProductFamily().c_str(), machine_info.GetHwRev().c_str());
   if (written < 0 || static_cast<size_t>(written) >= buffer_size) {
@@ -287,8 +262,19 @@ int SyslogClient::SendMessage(const char* format, va_list args) {
 #endif
 }
 
-void SyslogClient::Register() {
+void SyslogClient::Register(bool remote) {
 #ifdef ENABLE_REPORT_SYSLOG
+  if (remote && remote_reporting_) {
+    return;
+  }
+
+  if (remote && !is_initialized_) {
+    if (!InitializeClient()) {
+      INTERNAL_LOG("Failed to initialize syslog client");
+      return;
+    }
+  }
+
   if (xSemaphoreTake(syslog_mutex_, semaphore_timeout_) != pdTRUE) {
     INTERNAL_LOG("Failed to take mutex within %u ms",
                  SYSLOG_SEMAPHORE_TIMEOUT_MS);
@@ -296,12 +282,16 @@ void SyslogClient::Register() {
   }
 
   vprintf_like_t esp_printf_func = nullptr;
-  if (wifi_is_connected()) {
+  if (remote && !remote_reporting_) {
+    // INTERNAL_LOG("Registering syslog client for remote reporting");
+    remote_reporting_ = true;
     esp_printf_func = esp_log_set_vprintf(SyslogClient::Report);
-  } else {
+  } else if (!remote && remote_reporting_) {
+    // INTERNAL_LOG("Unregistering syslog client for remote reporting");
+    remote_reporting_ = false;
     esp_printf_func = esp_log_set_vprintf(SyslogClient::LogToStdout);
   }
-  if (esp_printf_ == nullptr) {
+  if (esp_printf_func != nullptr) {
     esp_printf_ = esp_printf_func;
   }
 
@@ -371,12 +361,12 @@ int SyslogClient::Report(const char* format, va_list args) {
 
 int SyslogClient::LogToStdout(const char* format, va_list args) {
   int written = 0;
+#ifdef ENABLE_LOG_STDOUT
   int size = vsnprintf(kLogBuffer, kLogBufferSize, format, args);
   LogCollector::GetInstance().Push(kLogBuffer, static_cast<size_t>(size));
 
-#ifdef ENABLE_LOG_STDOUT
   written = vprintf(format, args);
-#endif
 
+#endif
   return written;
 }

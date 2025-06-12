@@ -32,10 +32,9 @@ esp_err_t read_fpga_reg(FPGARegAddr addr, uint8_t *value) {
              addr);
     return ESP_ERR_INVALID_MAC;
   }
-  if (value == nullptr) {
-    return ESP_ERR_INVALID_ARG;
+  if (value != nullptr) {
+    *value = res.data;
   }
-  *value = res.data;
   return ESP_OK;
 }
 
@@ -58,24 +57,16 @@ esp_err_t write_fpga_reg(FPGARegAddr addr, uint8_t value) {
   return ESP_OK;
 }
 
-esp_err_t rpc::display::set_display_percentage(uint8_t percentage) {
+esp_err_t rpc::fpga::set_display_percentage(uint8_t percentage) {
   return write_fpga_reg(FPGARegAddr::DISPLAY_PERCENTAGE, percentage);
 }
 
-esp_err_t rpc::display::set_display_mode(uint8_t mode) {
-  switch (mode) {
-    case DisplayMode::OFF:
-    case DisplayMode::MANUAL:
-    case DisplayMode::POWER_METER:
-      ESP_LOGD(TAG, "Setting display mode to %d", mode);
-      return write_fpga_reg(FPGARegAddr::DISPLAY_MODE, mode);
-    default:
-      ESP_LOGE(TAG, "Invalid display mode %d", mode);
-  }
-  return ESP_ERR_INVALID_ARG;
+esp_err_t rpc::fpga::set_display_mode(uint8_t mode) {
+  ESP_LOGD(TAG, "Setting display mode to %d", mode);
+  return write_fpga_reg(FPGARegAddr::DISPLAY_MODE, mode);
 }
 
-esp_err_t rpc::display::set_display_intensity(uint8_t intensity) {
+esp_err_t rpc::fpga::set_display_intensity(uint8_t intensity) {
   return write_fpga_reg(FPGARegAddr::DISPLAY_INTENSITY, intensity);
 }
 
@@ -127,15 +118,8 @@ esp_err_t rpc::fpga::set_adc_threshold(uint8_t low, uint8_t high) {
   return ESP_OK;
 }
 
-esp_err_t rpc::display::set_display_flip_mode(uint8_t mode) {
-  switch (mode) {
-    case DisplayFlipMode::NORMAL:
-    case DisplayFlipMode::FLIP:
-      return write_fpga_reg(FPGARegAddr::DISPLAY_FLIP, mode);
-    default:
-      ESP_LOGE(TAG, "Invalid display filp mode: %d", mode);
-  }
-  return ESP_ERR_INVALID_ARG;
+esp_err_t rpc::fpga::set_display_flip_mode(uint8_t mode) {
+  return write_fpga_reg(FPGARegAddr::DISPLAY_FLIP, mode);
 }
 
 esp_err_t rpc::fpga::set_action_deadzone(uint8_t deadzone) {

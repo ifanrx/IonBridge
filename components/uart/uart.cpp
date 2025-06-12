@@ -11,6 +11,7 @@
 
 #include <algorithm>
 
+#include "driver/uart.h"
 #include "esp_check.h"
 #include "esp_err.h"
 #include "esp_log.h"
@@ -88,7 +89,7 @@
 #define UART_MESSAGE_BROADCAST(addr) (UART_MESSAGE_DST_ADDR(addr) == BCAST_ADDR)
 #define UART_RESET_DATA "\x5A\xA5\x5A\xA5"
 
-#define UART_BUF_SIZE (UART_MESSAGE_MAX_SZ * 2)
+#define UART_BUF_SIZE (UART_MESSAGE_MAX_SZ * 4)
 #define UART_TX_TARGET_IS_FPGA(addr) \
   (UART_MESSAGE_TO_FPGA(addr) || UART_MESSAGE_FROM_FPGA(addr))
 #define UART_TX_TARGET_INDEX(addr)                                             \
@@ -370,14 +371,18 @@ void uart_event_task(void *parameters) {
         break;
       }
       case UART_DATA: {
+#ifndef CONFIG_IDF_TARGET_LINUX
         ESP_LOGD(TAG, "data received: %d", event.size);
+#endif
         if (event.size == 0) {
           ESP_LOGW(TAG, "data size: 0");
           uart_flush_input(UART_PORT_NUM);
           continue;  // ignore empty data
         }
         if (event.size > UART_MESSAGE_MAX_SZ) {
+#ifndef CONFIG_IDF_TARGET_LINUX
           ESP_LOGW(TAG, "data size: %d", event.size);
+#endif
           uart_flush_input(UART_PORT_NUM);
           continue;  // ignore too large data
         }
@@ -441,7 +446,11 @@ esp_err_t uart_init() {
       .stop_bits = UART_STOP_BITS_1,
       .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
       .rx_flow_ctrl_thresh = 122,
+#ifdef CONFIG_IDF_TARGET_LINUX
+      .source_clk = 4,  // mock for testing
+#else
       .source_clk = UART_SCLK_DEFAULT,
+#endif
       .flags = {0},
   };
 
@@ -812,8 +821,10 @@ static void dispatch_uart_message(const uart_message_t &message) {
     return;
   }
 
+#ifndef CONFIG_IDF_TARGET_LINUX
   ESP_LOGD(TAG, "Notifying task 0x%" PRIx32 " for command 0x%04X",
            (uint32_t)task, command);
+#endif
   BaseType_t xHigherPriorityTaskWoken = pdFALSE;
 
   // Notify the task from ISR context

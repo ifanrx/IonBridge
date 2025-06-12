@@ -24,6 +24,10 @@ typedef struct {
 #define PING_COUNT 10
 
 esp_err_t root_handler(httpd_req_t *req);
+esp_err_t http_404_error_handler(httpd_req_t *req, httpd_err_code_t err);
+
+esp_err_t start_web_server(void);
+esp_err_t stop_web_server(void);
 
 #ifdef __cplusplus
 }

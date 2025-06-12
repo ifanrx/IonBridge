@@ -1,6 +1,8 @@
 #include "rpc.h"
 
 #include "esp_err.h"
+#include "sdkconfig.h"
+#include "utils.h"
 
 #define HARD_RESET_DELAY_MS 3000
 #define SOFT_RESET_DELAY_MS 1200

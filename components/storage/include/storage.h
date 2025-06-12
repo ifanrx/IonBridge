@@ -4,7 +4,6 @@
 #include <sys/types.h>
 
 #include <cstddef>
-#include <ios>
 
 #include "esp_err.h"
 
@@ -12,7 +11,7 @@ namespace Storage {
 esp_err_t Init();
 const char *GetBasePath();
 void GetTempFilePath(const char *filename, char *path);
-std::streamsize GetFileSize(const char *path);
+size_t GetFileSize(const char *path);
 esp_err_t ReadFilePart(const char *path, uint8_t *part, size_t partSize,
                        int offset);
 esp_err_t MoveFile(const char *src, const char *dst, bool overwrite = false);

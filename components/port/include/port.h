@@ -3,17 +3,14 @@
 
 #include <cstdint>
 #include <cstring>
-#include <string>
 
 #include "data_types.h"
 #include "esp_err.h"
 #include "esp_timer.h"
-#include "freertos/FreeRTOS.h"  // IWYU pragma: keep
-#include "freertos/timers.h"
 #include "port_data.h"
+#include "port_state.h"
 #include "ring_buffer.h"
 #include "sdkconfig.h"
-#include "singleton.h"
 
 #ifdef CONFIG_MCU_MODEL_SW3566
 #include "sw3566_data_types.h"
@@ -21,6 +18,7 @@
 #define PORT_MAX_POWER SW3566_MAX_POWER
 #define PORT_MIN_POWER SW3566_MIN_POWER
 #define PORT_MAX_CAP SW3566_MAX_CAP
+#define PORT_USB_A_MAX_CAP 60
 #define PORT_MIN_CAP SW3566_MIN_CAP
 #endif
 
@@ -29,6 +27,7 @@
 
 #define PORT_MAX_POWER FAKE_SW3566_MAX_POWER
 #define PORT_MIN_POWER FAKE_SW3566_MIN_POWER
+#define PORT_USB_A_MAX_CAP 60
 #define PORT_MAX_CAP FAKE_SW3566_MAX_CAP
 #define PORT_MIN_CAP FAKE_SW3566_MIN_CAP
 #endif
@@ -42,238 +41,10 @@ typedef struct __attribute__((packed)) {
   PowerFeatures features;
 } PortConfig;
 
-extern PortConfig default_port_config;
-extern PortConfig default_port_a_config;
-
-enum PortStateType {
-  UNKNOWN = -1,
-  ACTIVE,
-  INACTIVE,
-  ATTACHED,
-  OPENING,
-  CLOSING,
-  OVER_TEMP_WARNING,
-  OVER_TEMP_ALERT,
-  COOLING,
-  CHECKING,
-  RECOVERING,
-  DEAD,
-  POWER_LIMITING,
-};
-
-class Port;
-
-class PortState {
- protected:
-  PortStateType type_;
-
- public:
-  virtual ~PortState() = default;
-  virtual void Handle(Port &port) = 0;
-  virtual void Entering(Port &port) {}
-  virtual void Exiting(Port &port) {}
-
-  explicit PortState(PortStateType type) : type_(type) {}
-  PortStateType Type() const { return type_; }
-  std::string ToString() const {
-    switch (type_) {
-      case UNKNOWN:
-        return "UNKNOWN";
-      case ACTIVE:
-        return "ACTIVE";
-      case INACTIVE:
-        return "INACTIVE";
-      case ATTACHED:
-        return "ATTACHED";
-      case OPENING:
-        return "OPENING";
-      case CLOSING:
-        return "CLOSING";
-      case OVER_TEMP_WARNING:
-        return "OVER_TEMP_WARNING";
-      case OVER_TEMP_ALERT:
-        return "OVER_TEMP_ALERT";
-      case COOLING:
-        return "COOLING";
-      case CHECKING:
-        return "CHECKING";
-      case RECOVERING:
-        return "RECOVERING";
-      case DEAD:
-        return "DEAD";
-      case POWER_LIMITING:
-        return "LIMITED_POWER";
-      default:
-        return "";
-    }
-  }
-};
-
-class PortActiveState : public PortState, public Singleton<PortActiveState> {
- public:
-  void Handle(Port &port) override;
-
- private:
-  // Allow Singleton to access the constructor
-  friend class Singleton<PortActiveState>;
-  // Private constructor to prevent external instantiation
-  PortActiveState() : PortState(PortStateType::ACTIVE) {}
-};
-
-class PortInactiveState : public PortState,
-                          public Singleton<PortInactiveState> {
- public:
-  void Handle(Port &port) override {}
-
- private:
-  // Allow Singleton to access the constructor
-  friend class Singleton<PortInactiveState>;
-  // Private constructor to prevent external instantiation
-  PortInactiveState() : PortState(PortStateType::INACTIVE) {}
-};
-
-class PortAttachedState : public PortState,
-                          public Singleton<PortAttachedState> {
- public:
-  void Handle(Port &port) override;
-
- private:
-  // Allow Singleton to access the constructor
-  friend class Singleton<PortAttachedState>;
-  // Private constructor to prevent external instantiation
-  PortAttachedState() : PortState(PortStateType::ATTACHED) {}
-};
-
-class PortOpeningState : public PortState, public Singleton<PortOpeningState> {
- public:
-  void Handle(Port &port) override;
-
- private:
-  // Allow Singleton to access the constructor
-  friend class Singleton<PortOpeningState>;
-  // Private constructor to prevent external instantiation
-  PortOpeningState() : PortState(PortStateType::OPENING) {}
-};
-
-class PortClosingState : public PortState, public Singleton<PortClosingState> {
- public:
-  void Handle(Port &port) override;
-
- private:
-  // Allow Singleton to access the constructor
-  friend class Singleton<PortClosingState>;
-  // Private constructor to prevent external instantiation
-  PortClosingState() : PortState(PortStateType::CLOSING) {}
-};
-
-class PortOverTempWarningState : public PortState,
-                                 public Singleton<PortOverTempWarningState> {
- public:
-  void Handle(Port &port) override;
-
- private:
-  uint8_t exit_offset_ = 5;
-  uint8_t exit_temperature_ = CONFIG_PORT_TEMP_WARNING_THRESHOLD - exit_offset_;
-  uint8_t alert_temperature_ = CONFIG_PORT_TEMP_ALERT_THRESHOLD;
-  uint8_t max_temperature_ = CONFIG_PORT_TEMP_MAX_THRESHOLD;
-
-  // Allow Singleton to access the constructor
-  friend class Singleton<PortOverTempWarningState>;
-  // Private constructor to prevent external instantiation
-  PortOverTempWarningState() : PortState(PortStateType::OVER_TEMP_WARNING) {}
-};
-
-class PortOverTempAlertState : public PortState,
-                               public Singleton<PortOverTempAlertState> {
- public:
-  void Handle(Port &port) override;
-
- private:
-  uint8_t exit_offset_ = 5;
-  uint8_t exit_temperature_ = CONFIG_PORT_TEMP_ALERT_THRESHOLD - exit_offset_;
-  uint8_t max_temperature_ = CONFIG_PORT_TEMP_MAX_THRESHOLD;
-
-  // Allow Singleton to access the constructor
-  friend class Singleton<PortOverTempAlertState>;
-  // Private constructor to prevent external instantiation
-  PortOverTempAlertState() : PortState(PortStateType::OVER_TEMP_ALERT) {}
-};
-
-class PortCoolingState : public PortState, public Singleton<PortCoolingState> {
- public:
-  void Handle(Port &port) override;
-
- private:
-  uint8_t exit_offset_ = 5;
-  uint8_t exit_temperature_ = CONFIG_PORT_TEMP_WARNING_THRESHOLD - exit_offset_;
-  bool closed_ = false;
-
-  // Allow Singleton to access the constructor
-  friend class Singleton<PortCoolingState>;
-  // Private constructor to prevent external instantiation
-  PortCoolingState() : PortState(PortStateType::COOLING) {}
-};
-
-class PortCheckingState : public PortState,
-                          public Singleton<PortCheckingState> {
- public:
-  void Handle(Port &port) override;
-  void Entering(Port &port) override;
-  void Exiting(Port &port) override;
-
- private:
-  int64_t enter_time_ = -1;
-
-  // Allow Singleton to access the constructor
-  friend class Singleton<PortCheckingState>;
-  // Private constructor to prevent external instantiation
-  PortCheckingState() : PortState(PortStateType::CHECKING) {}
-
-  TimerHandle_t checking_timer_ = nullptr;
-  void StartWatchdog(Port &port);
-  void StopWatchdog();
-  static void WatchdogCallback(TimerHandle_t timer);
-};
-
-class PortRecoveringState : public PortState,
-                            public Singleton<PortRecoveringState> {
- public:
-  void Handle(Port &port) override;
-
- private:
-  // Allow Singleton to access the constructor
-  friend class Singleton<PortRecoveringState>;
-  // Private constructor to prevent external instantiation
-  PortRecoveringState() : PortState(PortStateType::RECOVERING) {}
-};
-
-class PortDeadState : public PortState, public Singleton<PortDeadState> {
- public:
-  void Handle(Port &port) override {}
-
- private:
-  // Allow Singleton to access the constructor
-  friend class Singleton<PortDeadState>;
-  // Private constructor to prevent external instantiation
-  PortDeadState() : PortState(PortStateType::DEAD) {}
-};
-
-class PortPowerLimitingState : public PortState,
-                               public Singleton<PortPowerLimitingState> {
- public:
-  void Handle(Port &port) override {}
-
- private:
-  // Allow Singleton to access the constructor
-  friend class Singleton<PortPowerLimitingState>;
-  // Private constructor to prevent external instantiation
-  PortPowerLimitingState() : PortState(PortStateType::POWER_LIMITING) {}
-};
-
 class Port {
   uint8_t id_;
   bool attached_ = false;
-  uint8_t power_budget_ = 0xFF;
+  uint8_t power_budget_ = 0xFF, power_budget_watermark_ = 0xFF;
   uint8_t initial_power_budget_ = 0xFF;
   bool initialized_ = false;
   PortPowerData data_;
@@ -294,23 +65,38 @@ class Port {
   HistoricalStatsData historical_stats_;
 
   PortStateType last_state_ = PortStateType::UNKNOWN;
+  PortConfig config_;
 
 #ifdef CONFIG_MCU_MODEL_SW3566
-  struct {
-    uint32_t version;
-    uint32_t flash_timestamp;
-  } bootloader_info_ = {};
+  SystemFlags system_flags_;
+#endif
+
+#if defined(CONFIG_MCU_MODEL_SW3566) || defined(CONFIG_MCU_MODEL_FAKE_SW3566)
+  Subscriptions subscriptions_ = {
+      .EnablePortDetailsUpdate = true,
+      .EnablePDStatusUpdate = true,
+      .EnablePDPcapStreaming = false,
+      .unused = 0,
+  };
 #endif
 
  public:
   explicit Port(uint8_t port_id);
-  ~Port();
+  ~Port() = default;
   uint8_t Id() const { return id_; }
   bool Initialize(bool active, uint8_t initial_power_budget);
   bool Reinitialize();
-  bool IsTypeA() const { return id_ == 0; }
+  bool IsTypeA() const {
+#if defined(CONFIG_MCU_MODEL_SW3566)
+    return system_flags_.port_type == PortType::PORT_TYPE_A;
+#elif defined(CONFIG_MCU_MODEL_FAKE_SW3566)
+    return id_ == 0;
+#else
+    return false;
+#endif
+  }
   bool IsInitialized() const { return initialized_; }
-  bool IsAdjustable();
+  bool IsAdjustable() const;
 
   void SetState(PortStateType type);
   void RevertToPreviousState() {
@@ -320,22 +106,37 @@ class Port {
   }
   const PortState &GetState() const { return *state_; }
   const PortPowerData &GetData() const { return data_; }
+  void GetData(uint8_t *fc_protocol, uint8_t *temperature, uint16_t *current,
+               uint16_t *voltage) const;
   uint8_t GetPowerUsage() const { return data_.GetPower(); }
-  void GetPDStatus(ClientPDStatus *status) const { *status = pd_status_; }
+  void GetPDStatus(ClientPDStatus *status) const {
+    if (data_.GetFCProtocol() >= FastChargingProtocol::FC_PD_Fix5V) {
+      *status = pd_status_;
+    }
+  }
   void GetPowerFeatures(PowerFeatures *features) const {
     *features = features_;
   }
-  void UpdatePowerFeatures(const PowerFeatures &features);
+  esp_err_t UpdatePowerFeatures(const PowerFeatures &features);
   uint32_t GetChargingDurationSeconds() const;
 
-  uint8_t MaxPowerCap() const { return PORT_MAX_CAP(id_); }
+  uint8_t MaxPowerCap() const {
+    if (IsTypeA()) {
+      return PORT_USB_A_MAX_CAP;
+    } else {
+      return PORT_MAX_CAP(id_);
+    }
+  }
   uint8_t MinPowerCap() const { return PORT_MIN_CAP(id_); }
   void EnsureBudgetInRange(uint8_t *power) const;
   bool RestoreInitialPowerBudget();
-  bool SetMaxPowerBudget(uint8_t max_power_budget, uint8_t watermark = 0,
-                         bool force_rebroadcast = false);
+  esp_err_t SetMaxPowerBudget(uint8_t MaxPowerBudget, uint8_t watermark = 0,
+                              bool forceRebroadcast = false,
+                              bool enterCheckingOnFailed = true);
   bool ApplyMaxPowerBudget(uint8_t max_power_budget);
-  bool ApplyMinPowerBudget() { return SetMaxPowerBudget(MinPowerCap()); }
+  bool ApplyMinPowerBudget() {
+    return SetMaxPowerBudget(MinPowerCap()) == ESP_OK;
+  }
   uint8_t MaxPowerBudget() const { return power_budget_; }
   uint8_t RemainingPowerBudget() const {
     return power_budget_ > GetPowerUsage() ? power_budget_ - GetPowerUsage()
@@ -356,6 +157,12 @@ class Port {
   uint32_t AttachedAtMS() const { return attached_at_; }
   uint8_t Temperature() const { return data_.GetTemperature(); }
 
+  bool Abnormal() const {
+    return state_ == nullptr || state_->Type() == PortStateType::CHECKING ||
+           state_->Type() == PortStateType::UNKNOWN ||
+           state_->Type() == PortStateType::DEAD ||
+           state_->Type() == PortStateType::RECOVERING;
+  }
   bool Dead() const {
     return state_ == nullptr || state_->Type() == PortStateType::DEAD;
   }
@@ -421,6 +228,9 @@ class Port {
   bool Close();
   bool Open();
   bool Toggle();
+  bool Attach();
+  bool Detach();
+
   void Shutdown();
   void Reset();
   void Update() {
@@ -428,7 +238,6 @@ class Port {
       state_->Handle(*this);
     }
   }
-
   esp_err_t Reconnect();
 
   int64_t UpdatedAt() const { return updated_at_; }
@@ -443,6 +252,7 @@ class Port {
     }
   }
   void UpdateData(const PortDetails &details);
+  void SetInactiveHistoricalData();
   void SetPDStatus(const ClientPDStatus &status) {
     if (this->Attached()) {
       updated_at_ = esp_timer_get_time();
@@ -462,21 +272,27 @@ class Port {
   void ExitPowerLimiting();
   void Reboot();
 
-#ifdef CONFIG_MCU_MODEL_SW3566
-  void GetBootloaderInfo(uint32_t *version, uint32_t *timestamp) const {
-    if (version) {
-      *version = bootloader_info_.version;
-    }
-    if (timestamp) {
-      *timestamp = bootloader_info_.flash_timestamp;
-    }
-  }
+  esp_err_t SubscribePDPcapStreaming(bool subscribe);
+  esp_err_t UnsubscribePDPcapStreaming();
+
+  PowerFeatures MigrateFeatures(const PortConfig &config) const;
+  const PortConfig &GetConfig() const { return config_; }
+  esp_err_t SetConfig(const PortConfig &config);
+  esp_err_t ApplyConfig(const PortConfig *config = nullptr);
+  esp_err_t ResetConfig();
+  esp_err_t SetPortType(PortType type);
+  PortType GetPortType() const {
+#if defined(CONFIG_MCU_MODEL_SW3566)
+    return static_cast<PortType>(system_flags_.port_type);
+#elif defined(CONFIG_MCU_MODEL_FAKE_SW3566)
+    return IsTypeA() ? PortType::PORT_TYPE_A : PortType::PORT_TYPE_C;
+#else
+    return PortType::PORT_TYPE_C;
 #endif
+  }
 
  private:
   void SetState(PortState *state);
 };
-
-void handle_port_config_compatibility(int i, PortConfig &config);
 
 #endif

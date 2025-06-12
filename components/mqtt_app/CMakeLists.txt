@@ -5,14 +5,15 @@ idf_component_register(
   INCLUDE_DIRS
   "include"
   REQUIRES
+  esp_timer
   mqtt
-  power
-  rpc
-  utils
   PRIV_REQUIRES
-  esp_wifi
   app
   ble
+  esp_wifi
+  machine_info
+  mqtt_message
   nvs_data
   task
+  utils
   wifi)

@@ -7,16 +7,13 @@ choice MCU_MODEL
     config MCU_MODEL_SW3566
         bool "SW3566"
 
-    config MCU_MODEL_SW3526_SW3536
-        bool "SW3526/SW3536"
-
     config MCU_MODEL_FAKE_SW3566
         bool "Fake SW3566"
 
 endchoice
 
-if MCU_MODEL_SW3566
 menu "SW3566 Configuration"
+depends on MCU_MODEL_SW3566
 
 config SW3566_COUNT
     int "Number of SW3566 chips"
@@ -24,29 +21,40 @@ config SW3566_COUNT
     help
         Number of SW3566 chips
 
-endmenu
-endif
-
-if MCU_MODEL_SW3526_SW3536
-menu"SW3526/SW3536 Configuration"
-
-config SW3526_COUNT
-    int "Number of SW3526 chips"
-    default 2
+config SW3566_MAX_POWER
+    int "Maximum Power for SW3566, W"
+    default 140
+    range 15 140
     help
-        Number of SW3526 chips
+        Maximum power for SW3566, W
 
-config SW3536_COUNT
-    int "Number of SW3536 chips"
-    default 3
+config SW3566_MIN_POWER
+    int "Minimum Power for SW3566, W"
+    default 15
+    range 15 140
     help
-        Number of SW3536 chips
+        Minimum power for SW3566, W
+
+config SW3566_TYPE_A_PORT
+    int "Type A port ID"
+    default 0
+    range -1 8
+    help
+        Type A port ID on the SW3566 chip.
+        -1 means no Type A ports.
+
+config SW3566_TYPE_A_MAX_POWER
+    int "Maximum Power for Type A Ports, W"
+    default 60 if SW3566_TYPE_A_PORT != -1
+    default SW3566_MAX_POWER
+    range SW3566_MIN_POWER SW3566_MAX_POWER
+    help
+        Maximum power for Type A ports, W
 
 endmenu
-endif
 
-if MCU_MODEL_FAKE_SW3566
 menu "Fake SW3566 Configuration"
+depends on MCU_MODEL_FAKE_SW3566
 
 config FAKE_SW3566_COUNT
     int "Number of Fake SW3566 chips"
@@ -54,8 +62,49 @@ config FAKE_SW3566_COUNT
     help
         Number of Fake SW3566 chips
 
+config FAKE_SW3566_MAX_POWER
+    int "Maximum Power for Fake SW3566, W"
+    default 140
+    range 15 140
+    help
+        Maximum power for Fake SW3566, W
+
+config FAKE_SW3566_MIN_POWER
+    int "Minimum Power for Fake SW3566, W"
+    default 15
+    range 15 140
+    help
+        Minimum power for Fake SW3566, W
+
+config FAKE_SW3566_TYPE_A_PORT
+    int "Type A port ID"
+    default 0
+    range -1 8
+    help
+        Type A port ID on the Fake SW3566 chip.
+        -1 means no Type A ports.
+
+config FAKE_SW3566_TYPE_A_MAX_POWER
+    int "Maximum Power for Type A Ports, W"
+    depends on FAKE_SW3566_TYPE_A_PORT != -1
+    default 60
+    range 15 60
+    help
+        Maximum power for Type A ports, W
+
 endmenu
-endif
+
+config PORT_VID
+    hex "Port VID"
+    default 0x36E9
+    help
+        Vendor ID for the port.
+
+config PORT_PID
+    hex "Port PID"
+    default 0x0000
+    help
+        Product ID for the port.
 
 config PORT_TRICKLE_CHARGING_THRESHOLD
     int "Port Trickle Charging Threshold"
@@ -122,6 +171,13 @@ config PORT_MANAGER_EVENT_QUEUE_SIZE
     default 20
     help
         Defines the size of the event queue for the port manager.
+
+config PORT_MANAGER_TASK_PRIORITY
+    int "Port Manager Task Priority"
+    range 1 23
+    default 21
+    help
+        Defines the priority for the port manager task.
 
 config PORT_MANAGER_TASK_STACK_SIZE
     int "Port Manager Task Stack Size"

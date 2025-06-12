@@ -1,11 +1,10 @@
 #include "controller.h"
 
-#include <sys/_intsup.h>
 #include <sys/types.h>
 
 #include <cstdint>
 
-#include "data_types.h"
+#include "display_manager.h"
 #include "esp_check.h"
 #include "esp_err.h"
 #include "esp_flash_partitions.h"
@@ -17,8 +16,9 @@
 #include "ionbridge.h"
 #include "machine_info.h"
 #include "nvs_namespace.h"
+#include "port.h"
+#include "port_manager.h"
 #include "power_allocator.h"
-#include "rpc.h"
 #include "sdkconfig.h"
 
 #define OTA_CONFIRM_REQUEST_TIMEOUT CONFIG_OTA_CONFIRM_REQUEST_TIMEOUT
@@ -28,14 +28,14 @@
 
 static const char *TAG = "Controller";
 
-void rollback() {
+void DeviceController::rollback() {
   ESP_LOGI(TAG, "Rolling back to previous app");
   if (esp_ota_mark_app_invalid_rollback_and_reboot() != ESP_OK) {
     ESP_LOGE(TAG, "esp_ota_mark_app_invalid_rollback_and_reboot failed");
   }
 }
 
-bool is_ota_pending_verify() {
+bool DeviceController::is_ota_pending_verify() {
   const esp_partition_t *running = esp_ota_get_running_partition();
   esp_ota_img_states_t ota_state;
   esp_err_t ret = esp_ota_get_state_partition(running, &ota_state);
@@ -47,7 +47,13 @@ bool is_ota_pending_verify() {
   return ota_state == ESP_OTA_IMG_PENDING_VERIFY;
 }
 
-void DeviceController::rollback_ota() { rollback(); }
+void DeviceController::try_rollback() {
+  if (this->is_in_ota()) {
+    this->rollback();
+  } else {
+    ESP_LOGW(TAG, "Not in OTA state, not rolling back");
+  }
+}
 
 DeviceController::DeviceController() {
   if (is_ota_pending_verify()) {
@@ -101,6 +107,25 @@ ROLLBACK:
   return ret;
 }
 
+void DeviceController::try_confirm() {
+  if (this->is_in_ota()) {
+    this->confirm();
+  }
+}
+
+void DeviceController::set_upgrading(bool upgrading) {
+  upgrading_ = upgrading;
+  if (upgrading_) {
+    PowerAllocator &allocator = PowerAllocator::GetInstance();
+    PortManager &pm = PortManager::GetInstance();
+    pm.ForEach([](Port &port) {
+      port.Shutdown();
+      return true;
+    });
+    allocator.Stop();
+  }
+}
+
 esp_err_t DeviceController::power_off() {
   if (status_ == DeviceControllerStatus::POWER_DOWN) {
     return ESP_OK;
@@ -109,9 +134,12 @@ esp_err_t DeviceController::power_off() {
                       ESP_ERR_INVALID_STATE, TAG,
                       "Attempted to power off while not in POWER_UP state");
   status_ = DeviceControllerStatus::POWER_DOWN;
-  ESP_ERROR_COMPLAIN(rpc::display::set_display_mode(DisplayMode::OFF),
-                     "rpc::display::set_display_mode: OFF");
-  PowerAllocator::GetInstance().GetPortManager().TurnOffAllPorts();
+  ESP_ERROR_COMPLAIN(DisplayManager::GetInstance().DisplayOff(), "DisplayOff");
+  PortManager &pm = PortManager::GetInstance();
+  pm.ForEach([](Port &port) {
+    port.Close();
+    return true;
+  });
   return ESP_OK;
 }
 
@@ -120,9 +148,12 @@ esp_err_t DeviceController::power_on() {
     return ESP_OK;
   }
   status_ = DeviceControllerStatus::POWER_UP;
-  ESP_ERROR_COMPLAIN(rpc::display::set_display_mode(display_mode_),
-                     "rpc::display::set_display_mode: 0x%x", display_mode_);
-  PowerAllocator::GetInstance().GetPortManager().TurnOnAllPorts();
+  ESP_ERROR_COMPLAIN(DisplayManager::GetInstance().DisplayOn(), "DisplayOn");
+  PortManager &pm = PortManager::GetInstance();
+  pm.ForEach([](Port &port) {
+    port.Open();
+    return true;
+  });
   return ESP_OK;
 }
 
@@ -137,19 +168,4 @@ void DeviceController::reboot_after(int delay_ms) {
 void DeviceController::reboot() {
   ESP_LOGI(TAG, "Rebooting");
   esp_restart();
-}
-
-esp_err_t DeviceController::set_display_intensity(uint8_t intensity) {
-  ESP_RETURN_ON_ERROR(rpc::display::set_display_intensity(intensity), TAG,
-                      "rpc::display::set_display_intensity");
-  ESP_LOGW(TAG, "Display intensity set to %d", intensity);
-  display_intensity_ = intensity;
-  return ESP_OK;
-}
-
-esp_err_t DeviceController::set_display_mode(uint8_t mode) {
-  ESP_RETURN_ON_ERROR(rpc::display::set_display_mode(mode), TAG,
-                      "rpc::display::set_display_mode");
-  display_mode_ = mode;
-  return ESP_OK;
 }

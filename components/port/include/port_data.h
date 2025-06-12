@@ -4,6 +4,8 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "esp_log.h"
+
 class PortPowerData {
  protected:
   uint8_t fc_protocol;

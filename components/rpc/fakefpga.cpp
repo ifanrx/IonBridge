@@ -1,3 +1,4 @@
+#include "display_types.h"
 #include "esp_check.h"
 #include "esp_log.h"
 #include "fpga_data_types.h"
@@ -18,11 +19,11 @@ esp_err_t read_fpga_reg(FPGARegAddr addr, uint8_t *value) {
 
 esp_err_t write_fpga_reg(FPGARegAddr addr, uint8_t value) { return ESP_OK; }
 
-esp_err_t rpc::display::set_display_percentage(uint8_t percentage) {
+esp_err_t rpc::fpga::set_display_percentage(uint8_t percentage) {
   return write_fpga_reg(FPGARegAddr::DISPLAY_PERCENTAGE, percentage);
 }
 
-esp_err_t rpc::display::set_display_mode(uint8_t mode) {
+esp_err_t rpc::fpga::set_display_mode(uint8_t mode) {
   switch (mode) {
     case DisplayMode::OFF:
     case DisplayMode::MANUAL:
@@ -34,7 +35,7 @@ esp_err_t rpc::display::set_display_mode(uint8_t mode) {
   return ESP_ERR_INVALID_ARG;
 }
 
-esp_err_t rpc::display::set_display_intensity(uint8_t intensity) {
+esp_err_t rpc::fpga::set_display_intensity(uint8_t intensity) {
   return write_fpga_reg(FPGARegAddr::DISPLAY_INTENSITY, intensity);
 }
 
@@ -86,7 +87,7 @@ esp_err_t rpc::fpga::set_adc_threshold(uint8_t low, uint8_t high) {
   return ESP_OK;
 }
 
-esp_err_t rpc::display::set_display_flip_mode(uint8_t mode) {
+esp_err_t rpc::fpga::set_display_flip_mode(uint8_t mode) {
   switch (mode) {
     case DisplayFlipMode::NORMAL:
     case DisplayFlipMode::FLIP:

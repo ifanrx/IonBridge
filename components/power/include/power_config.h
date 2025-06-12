@@ -5,9 +5,11 @@
 
 #include "esp_err.h"
 
+constexpr uint8_t kPowerConfigVersion = 1;
+
 typedef struct __attribute__((packed)) {
   uint8_t version;
-  uint8_t power_budget;
+  uint16_t power_budget;
 
   uint8_t device_high_temp_threshold;
   uint8_t device_high_temp_min_power;

@@ -7,14 +7,13 @@ idf_component_register(
   REQUIRES
   version
   PRIV_REQUIRES
-  animation
-  app
   app_update
+  display
   esp_http_client
   esp_https_ota
   esp_partition
+  machine_info
   mbedtls
-  mqtt_app
   nvs_data
   storage
   task

@@ -85,7 +85,7 @@ $ idf.py set-target esp32c3
 Copy sdkconfig.develop or sdkconfig.fake to sdkconfig:
 
 ```bash
-$ cp sdkconfig.develop sdkconfig
+$ cp configs/sdkconfig.develop sdkconfig
 ```
 
 ### Build the Project

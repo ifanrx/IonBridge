@@ -12,10 +12,12 @@
 #include "esp_err.h"
 #include "esp_log.h"
 #include "ionbridge.h"
+#include "nvs.h"
 #include "nvs_default.h"
 #include "nvs_namespace.h"
 #include "sdkconfig.h"
 
+#define WIFI_MAX_ENTRY CONFIG_WIFI_MAX_ENTRY
 #define WIFI_DEFAULT_SSID CONFIG_IONBRIDGE_WIFI_DEFAULT_SSID
 #define WIFI_DEFAULT_PASSWD CONFIG_IONBRIDGE_WIFI_DEFAULT_PASSWORD
 
@@ -58,8 +60,15 @@ esp_err_t WiFiStorage::Add(const WiFiEntry& entry) {
   }
 
   WiFiEntry existing_entry;
-  ESP_RETURN_ON_ERROR(Get(slot_index, &existing_entry), TAG,
-                      "Failed to get Wi-Fi entry at index %d", slot_index);
+  esp_err_t err = Get(slot_index, &existing_entry);
+  if (err != ESP_OK && err != ESP_ERR_NVS_NOT_FOUND) {
+    ESP_LOGE(TAG, "Failed to get Wi-Fi entry at index %d", slot_index);
+    return err;
+  } else if (err == ESP_ERR_NVS_NOT_FOUND) {
+    // hash_ is out of sync with the actual data, reset it
+    hash_[slot_index] = 0;
+    return Create(entry);
+  }
 
   if (strcmp(existing_entry.ssid, entry.ssid) != 0) {
     return Create(entry);
@@ -135,6 +144,15 @@ esp_err_t WiFiStorage::GetBySSID(const char* ssid, WiFiEntry* entry) const {
 }
 
 int WiFiStorage::FindEmptySlot() const {
+  int used_slot = 0;
+  for (size_t i = 0; i < WIFI_SLOT_COUNT; ++i) {
+    if (hash_[i] != 0) {
+      used_slot++;
+    }
+  }
+  if (used_slot >= WIFI_MAX_ENTRY) {
+    return -1;
+  }
   for (size_t i = 0; i < WIFI_SLOT_COUNT; ++i) {
     if (hash_[i] == 0) {
       return i;

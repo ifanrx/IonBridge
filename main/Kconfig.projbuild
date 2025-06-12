@@ -7,6 +7,13 @@ config WATCHDOG_TIMEOUT
         Timeout for the watchdog timer in milliseconds.
         This value should be greater than the value set for OTA_CONFIRM_TIMEOUT.
 
+config WATCHDOG_TASK_PRIORITY
+    int "Watchdog Task Priority"
+    default 23
+    range 1 23
+    help
+        Priority of the watchdog task. Higher values give the task higher priority.
+
 comment "ESP32 Firmware Version is set to follow the project version. Change Project Version to modify it."
 
 config ESP32_API_LEVEL
@@ -96,13 +103,6 @@ config ENABLE_RFTEST
     help
         Enable rftest.
 
-config ANIMATION_FRAME_RATE
-    int "Animation frame rate"
-    default 6
-    range 1 30
-    help
-        Animation frame rate(frame per second)
-
 config ENABLE_HW_REVISION_MODIFICATION
     bool "Enable Hardware Revision Modification"
     default n
@@ -160,46 +160,41 @@ config ALL_PORTS_ENABLED
     help
       Enable all ports simultaneously. If disabled, you can individually enable or disable each port.
 
-if !ALL_PORTS_ENABLED
-
-    # Individual port options
-    config PORT_0_ENABLED
-        bool "Enable Port 0"
-        default y
-        help
-          Enable or disable Port 0.
-
-    config PORT_1_ENABLED
-        bool "Enable Port 1"
-        default y
-        help
-          Enable or disable Port 1.
-
-    config PORT_2_ENABLED
-        bool "Enable Port 2"
-        default y
-        help
-          Enable or disable Port 2.
-
-    config PORT_3_ENABLED
-        bool "Enable Port 3"
-        default y
-        help
-          Enable or disable Port 3.
-
-    config PORT_4_ENABLED
-        bool "Enable Port 4"
-        default y
-        help
-          Enable or disable Port 4.
-
-endif
-
-config ENABLE_RESTART_MQTT_CLIENT
-    bool "Enable Restart MQTT Client at low memory"
-    default n
+# Individual port options
+config PORT_0_ENABLED
+    bool "Enable Port 0"
+    depends on !ALL_PORTS_ENABLED
+    default y
     help
-        Enable restarting the MQTT client at low memory.
+      Enable or disable Port 0.
+
+config PORT_1_ENABLED
+    bool "Enable Port 1"
+    depends on !ALL_PORTS_ENABLED
+    default y
+    help
+      Enable or disable Port 1.
+
+config PORT_2_ENABLED
+    bool "Enable Port 2"
+    depends on !ALL_PORTS_ENABLED
+    default y
+    help
+      Enable or disable Port 2.
+
+config PORT_3_ENABLED
+    bool "Enable Port 3"
+    depends on !ALL_PORTS_ENABLED
+    default y
+    help
+      Enable or disable Port 3.
+
+config PORT_4_ENABLED
+    bool "Enable Port 4"
+    depends on !ALL_PORTS_ENABLED
+    default y
+    help
+      Enable or disable Port 4.
 
 config SKIP_3566_UPGRADE
     bool "Skip 3566 Upgrade"
@@ -225,5 +220,23 @@ config ENABLE_AUTO_STREAM_DATA
     default n
     help
         Enable auto stream data.
+
+config ENABLE_BLE_AND_MQTT_MUTUAL_EXCLUSION
+    bool "Enable BLE and MQTT Mutual Exclusion"
+    default n
+    help
+        Enable BLE and MQTT mutual exclusion.
+
+config ENABLE_ANIMATION_HTTP_TEST_API
+    bool "Enable Animation HTTP Test API"
+    default n
+    help
+        Enable animation http control api.
+
+config ENABLE_FACTORY_MODE
+    bool "Enable Factory Mode"
+    default n
+    help
+        Enable factory mode.
 
 endmenu

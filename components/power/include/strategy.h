@@ -15,6 +15,8 @@ enum StrategyType : uint8_t {
   SLOW_CHARGING = 0x01,
   STATIC_CHARGING = 0x02,
   TEMPORARY_CHARGING = 0x03,
+  LEGACY_CHARGING = 0x04,
+  USBA_CHARGING = 0x06,
   UNKNOWN_STRATEGY = 0xFF,
 };
 
@@ -41,7 +43,7 @@ typedef struct __attribute__((packed)) {
 } PowerAllocationTable;
 
 class PowerStrategy {
-  uint8_t max_power_ = POWER_BUDGET;
+  uint16_t max_power_ = POWER_BUDGET;
   // Safety margin for non-adjustable ports
   uint8_t safety_margin_ = 5;
   uint64_t last_stage_switch_time_ = 0;
@@ -56,33 +58,33 @@ class PowerStrategy {
 
  public:
   virtual ~PowerStrategy() = default;
-  virtual int8_t Allocate(const Port &port, uint8_t remaining_power) = 0;
+  virtual int16_t Allocate(const Port &port, uint16_t remaining_power) = 0;
 
   PowerStrategy(uint32_t cooldown_period_secs);
   void SetCooldownPeriod(uint32_t cooldown_period_secs);
   bool IsChangeSignificant(const Port &port, int8_t power_adjustment);
-  virtual uint8_t Apply(PortManager &port_manager);
-  virtual void PortAttached(PortManager &port_manager);
-  virtual void PortDetached(PortManager &port_manager);
+  virtual uint16_t Apply(PortManager &port_manager);
+  virtual void PortAttached(PortManager &port_manager, uint8_t port_id);
+  virtual void PortDetached(PortManager &port_manager, uint8_t port_id);
   virtual void Reallocate(PortManager &port_manager);
   uint8_t HandleActualProvisioning(PortManager &port_manager,
-                                   uint8_t total_usage);
+                                   uint16_t total_usage);
   virtual void SetupInitialPower(PortManager &port_manager);
   virtual void Teardown(PortManager &port_manager) {};
   uint8_t InitialPower() const { return initial_power_; }
   StrategyType Type() const { return stratege_type_; }
-  void SetPowerBudget(uint8_t budget) {
-    max_power_ = std::min(budget, (uint8_t)POWER_BUDGET);
+  void SetPowerBudget(uint16_t budget) {
+    max_power_ = std::min(budget, (uint16_t)POWER_BUDGET);
   }
-  void DecreasePowerBudget(uint8_t decrease) {
+  void DecreasePowerBudget(uint16_t decrease) {
     if (max_power_ > decrease) {
       SetPowerBudget(max_power_ - decrease);
     }
   }
-  void IncreasePowerBudget(uint8_t increase) {
+  void IncreasePowerBudget(uint16_t increase) {
     SetPowerBudget(max_power_ + increase);
   }
-  uint8_t MaxPowerBudget() const { return max_power_; }
+  uint16_t MaxPowerBudget() const { return max_power_; }
   uint8_t Stage() const { return strategy_stage_; }
   uint64_t LastStageSwitchTime() const { return last_stage_switch_time_; }
 };
@@ -97,8 +99,8 @@ class PowerSlowChargingStrategy : public PowerStrategy {
   }
   void SetupInitialPower(PortManager &port_manager) override;
   void Teardown(PortManager &port_manager) override;
-  int8_t Allocate(const Port &port, uint8_t remaining_power) override;
-  uint8_t Apply(PortManager &port_manager) override;
+  int16_t Allocate(const Port &port, uint16_t remaining_power) override;
+  uint16_t Apply(PortManager &port_manager) override;
 };
 
 class PowerStaticChargingStrategy : public PowerStrategy {
@@ -115,10 +117,10 @@ class PowerStaticChargingStrategy : public PowerStrategy {
     stratege_type_ = STATIC_CHARGING;
     std::memcpy(&power_table_, &table, sizeof(PowerAllocationTable));
   }
-  int8_t Allocate(const Port &port, uint8_t remaining_power) override {
+  int16_t Allocate(const Port &port, uint16_t remaining_power) override {
     return 0;
   };
-  uint8_t Apply(PortManager &port_manager) override;
+  uint16_t Apply(PortManager &port_manager) override;
   void SetupInitialPower(PortManager &port_manager) override;
   void GetIdentifier(uint16_t *identifier) const { *identifier = identifier_; }
   void GetVersion(uint8_t *version) const { *version = power_table_.version; }
@@ -137,11 +139,38 @@ class PowerTemporaryChargingStrategy : public PowerStrategy {
     std::memcpy(power_allocation_, power_allocation,
                 NUM_PORTS * sizeof(uint8_t));
   }
-  int8_t Allocate(const Port &port, uint8_t remaining_power) override {
+  int16_t Allocate(const Port &port, uint16_t remaining_power) override {
     return 0;
   };
-  uint8_t Apply(PortManager &port_manager) override;
+  uint16_t Apply(PortManager &port_manager) override;
   void SetupInitialPower(PortManager &port_manager) override;
+};
+
+class LegacyChargingStrategy : public PowerStrategy {
+  uint8_t max_power_ = POWER_BUDGET;
+
+ public:
+  static constexpr StrategyType TYPE = LEGACY_CHARGING;
+  LegacyChargingStrategy(uint32_t cooldown_period_secs)
+      : PowerStrategy(cooldown_period_secs) {
+    initial_power_ = PORT_MAX_POWER;
+    stratege_type_ = LEGACY_CHARGING;
+  }
+  uint16_t Apply(PortManager &pm) override;
+};
+
+class PowerUSBAChargingStrategy : public PowerSlowChargingStrategy {
+  static constexpr uint8_t SIMULATE_PORT_ID = 4;
+
+ public:
+  static constexpr StrategyType TYPE = USBA_CHARGING;
+  PowerUSBAChargingStrategy(uint32_t cooldown_period_secs)
+      : PowerSlowChargingStrategy(cooldown_period_secs) {
+    stratege_type_ = USBA_CHARGING;
+  }
+
+  void SetupInitialPower(PortManager &port_manager) override;
+  void Teardown(PortManager &port_manager) override;
 };
 
 #endif

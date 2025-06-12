@@ -7,15 +7,15 @@
 #include "esp_err.h"
 #include "version.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 enum FirmwareType : uint8_t {
   FIRMWARE_TYPE_FPGA = 1,
   FIRMWARE_TYPE_ESP32 = 2,
   FIRMWARE_TYPE_SW3566 = 3,
 };
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 esp_err_t get_firmware_url(uint8_t type, const Version &version, char *url,
                            size_t url_len);

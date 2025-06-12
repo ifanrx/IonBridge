@@ -4,19 +4,12 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
-#include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
-#include "controller.h"
 #include "esp_err.h"
-#include "power_allocator.h"
 #include "service.h"
-
-#ifdef __cplusplus
-extern "C" {
-#endif
 
 enum ServiceScope {
   SERVICE_SCOPE_BLE,
@@ -24,27 +17,16 @@ enum ServiceScope {
   SERVICE_SCOPE_ALL,
 };
 
-class AppContext {
- public:
-  DeviceController &controller;
-  PowerAllocator &pAllocator;
-
-  AppContext(DeviceController &controller, PowerAllocator &pAllocator);
-};
-
-using SrvFunc = std::function<esp_err_t(
-    AppContext &, const std::vector<uint8_t> &, std::vector<uint8_t> &)>;
+using SrvFunc = std::function<esp_err_t(const std::vector<uint8_t> &,
+                                        std::vector<uint8_t> &)>;
 
 class App {
  private:
-  std::unique_ptr<AppContext> m_ctx;
   std::unordered_map<ServiceCommand, SrvFunc> m_ble_services;
   std::unordered_map<ServiceCommand, SrvFunc> m_mqtt_services;
 
   App() = default;
   ~App() = default;
-
-  bool is_initialized = false;
 
  public:
   App(const App &) = delete;
@@ -54,9 +36,6 @@ class App {
     static App instance;
     return instance;
   }
-
-  void Init(DeviceController &controller, PowerAllocator &pAllocator);
-  bool IsInitialized() { return is_initialized; }
 
   void String(const std::string &str, std::vector<uint8_t> &response);
 
@@ -69,14 +48,8 @@ class App {
   size_t ExecSrvFromBle(uint8_t service, uint8_t *payload, size_t payloadSize,
                         uint8_t *response, size_t responseSize);
 
-  void ExecSrvFromMQTT(uint8_t service, std::vector<uint8_t> &request,
+  void ExecSrvFromMQTT(uint8_t service, const std::vector<uint8_t> &request,
                        std::vector<uint8_t> &response);
-
-  void ProcessMQTTMessage(const char *data, int length);
 };
-
-#ifdef __cplusplus
-}
-#endif
 
 #endif

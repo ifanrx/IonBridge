@@ -7,10 +7,10 @@
 
 class ServerCallbacks : public NimBLEServerCallbacks {
  public:
-  void onConnect(NimBLEServer *pServer, NimBLEConnInfo &connInfo);
+  void onConnect(NimBLEServer *pServer, NimBLEConnInfo &connInfo) override;
   void onDisconnect(NimBLEServer *pServer, NimBLEConnInfo &connInfo,
-                    int reason);
-  void onMTUChange(uint16_t MTU, NimBLEConnInfo &connInfo);
+                    int reason) override;
+  void onMTUChange(uint16_t MTU, NimBLEConnInfo &connInfo) override;
 };
 
 class CharacteristicCallbacks : public NimBLECharacteristicCallbacks {

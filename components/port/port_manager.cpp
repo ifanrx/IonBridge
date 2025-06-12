@@ -4,20 +4,16 @@
 
 #include <algorithm>
 #include <array>
-#include <cinttypes>
 #include <cstdint>
+#include <cstring>
 #include <functional>
 #include <memory>
-#include <numeric>
 
-#include "data_types.h"
-#include "esp_err.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/idf_additions.h"
 #include "freertos/projdefs.h"
 #include "port.h"
-#include "port_data.h"
 #include "portmacro.h"
 #include "sdkconfig.h"
 
@@ -26,6 +22,11 @@
 #endif
 
 #ifdef CONFIG_INTERFACE_TYPE_UART
+#include <cinttypes>
+
+#include "esp_log_buffer.h"
+#include "esp_log_level.h"
+#include "telemetry_task.h"
 #include "uart.h"
 #endif
 
@@ -41,19 +42,18 @@
 #define EVENT_DEQUEUE_TIMEOUT \
   pdMS_TO_TICKS(CONFIG_PORT_MANAGER_EVENT_DEQUEUE_TIMEOUT_MS)
 
-#define ENSURE_PORT_ID(port_id, ...)                   \
-  do {                                                 \
-    if ((port_id) >= NUM_PORTS) {                      \
-      ESP_LOGE(TAG, "Invalid port ID: %d", (port_id)); \
-      return __VA_ARGS__;                              \
-    }                                                  \
+#define ENSURE_PORT_ID(port_id, ...)                                      \
+  do {                                                                    \
+    if ((port_id) >= NUM_PORTS) {                                         \
+      ESP_LOGE(TAG, "%s(%d) Invalid port ID: %d", __FUNCTION__, __LINE__, \
+               (port_id));                                                \
+      return __VA_ARGS__;                                                 \
+    }                                                                     \
   } while (0)
-#define SET_BITS(original, mask, value) \
-  ((original) = ((original) & ~(mask)) | ((value) & (mask)))
 
 static const char* TAG = "PortManager";
 
-PortManager::PortManager() : dummy_stats_data_(PORT_HISTORICAL_DATA_SIZE) {
+PortManager::PortManager() {
   // Initialize ports_
   for (int i = 0; i < NUM_PORTS; i++) {
     ports_[i] = std::make_unique<Port>(i);
@@ -63,6 +63,12 @@ PortManager::PortManager() : dummy_stats_data_(PORT_HISTORICAL_DATA_SIZE) {
   eventQueue_ = xQueueCreate(EVENT_QUEUE_SIZE, sizeof(PortManagerEvent));
   if (eventQueue_ == nullptr) {
     ESP_LOGE(TAG, "Failed to create event queue");
+  }
+
+  // Create mutex
+  mutex_ = xSemaphoreCreateMutex();
+  if (mutex_ == nullptr) {
+    ESP_LOGE(TAG, "Failed to create mutex");
   }
 }
 
@@ -78,9 +84,9 @@ void PortManager::StartTask() {
     return;
   }
   taskRunning_ = false;
-  BaseType_t res = xTaskCreate(&PortManager::TaskLoopWrapper, "port_manager",
-                               TASK_STACK_SIZE, this,
-                               CONFIG_UART_EVENT_TASK_PRIORITY, &taskHandle_);
+  BaseType_t res =
+      xTaskCreate(&PortManager::TaskLoopWrapper, "port_mgr", TASK_STACK_SIZE,
+                  this, CONFIG_PORT_MANAGER_TASK_PRIORITY, &taskHandle_);
   if (res != pdPASS) {
     ESP_LOGE(TAG, "Failed to create PortManager task");
     return;
@@ -114,7 +120,9 @@ void PortManager::TaskLoop() {
       }
     } else {
       // timeout, update alive ports
-      this->UpdateAlivePortsStage();
+      for (Port& port : this->GetAlivePorts()) {
+        port.Update();
+      }
     }
 #else
     for (Port& port : *this) {
@@ -149,119 +157,50 @@ bool PortManager::InitializePort(uint8_t port_id, bool active,
 }
 
 Port* PortManager::GetPort(uint8_t port_id) {
-  ENSURE_PORT_ID(port_id, nullptr);
+  if (port_id >= NUM_PORTS) {
+    return nullptr;
+  }
   return ports_[port_id].get();
 }
 
-esp_err_t PortManager::GetPortData(uint8_t port_id, uint8_t* fc_protocol,
-                                   uint8_t* temperature, uint16_t* current,
-                                   uint16_t* voltage) const {
-  ENSURE_PORT_ID(port_id, ESP_ERR_INVALID_ARG);
-  bool attached = ports_[port_id]->Attached();
-  const PortPowerData& data = ports_[port_id]->GetData();
-  if (fc_protocol != nullptr) {
-    *fc_protocol =
-        attached ? data.GetFCProtocol() : static_cast<uint8_t>(FC_NOT_CHARGING);
-  }
-  if (temperature != nullptr) {
-    *temperature = attached ? data.GetTemperature() : 0;
-  }
-  if (current != nullptr) {
-    *current = attached ? data.GetCurrent() : 0;
-  }
-  if (voltage != nullptr) {
-    *voltage = attached ? data.GetVoltage() : 0;
-  }
-  return ESP_OK;
-}
-
-uint32_t PortManager::GetPortChargingDurationSeconds(uint8_t port_id) const {
-  ENSURE_PORT_ID(port_id, 0);
-  return ports_[port_id]->GetChargingDurationSeconds();
-}
-
-esp_err_t PortManager::GetPortPDStatus(uint8_t port_id,
-                                       ClientPDStatus* pd_status) const {
-  ENSURE_PORT_ID(port_id, ESP_ERR_INVALID_ARG);
-  if (pd_status != nullptr) {
-    ports_[port_id]->GetPDStatus(pd_status);
-  }
-  return ESP_OK;
-}
-
-esp_err_t PortManager::GetPortPowerFeatures(uint8_t port_id,
-                                            PowerFeatures* features) const {
-  ENSURE_PORT_ID(port_id, ESP_ERR_INVALID_ARG);
-  if (features != nullptr) {
-    ports_[port_id]->GetPowerFeatures(features);
-  }
-  return ESP_OK;
-}
-
-esp_err_t PortManager::SetPortPowerFeatures(uint8_t port_id,
-                                            const PowerFeatures& features) {
-  ENSURE_PORT_ID(port_id, ESP_ERR_INVALID_ARG);
-  ports_[port_id]->UpdatePowerFeatures(features);
-  return ESP_OK;
-}
-
-esp_err_t PortManager::SetPortConfig(uint8_t port_id,
-                                     const PortConfig& config) {
-  ENSURE_PORT_ID(port_id, ESP_ERR_INVALID_ARG);
-  Port* port = ports_[port_id].get();
-  PowerFeatures features;
-  port->GetPowerFeatures(&features);
-
-  // Directly assign the first byte
-  ((uint8_t*)&features)[0] = ((uint8_t*)&config.features)[0];
-  // Assign the first 6 bits of the second byte
-  SET_BITS(((uint8_t*)&features)[1], 0x3F, ((uint8_t*)&config.features)[1]);
-  // Assign the first 1 bits of the third byte
-  SET_BITS(((uint8_t*)&features)[2], 0x01, ((uint8_t*)&config.features)[2]);
-
-  port->UpdatePowerFeatures(features);
-  return port->Reconnect();
-}
-
-uint8_t PortManager::GetPortsPowerUsage() const {
-  return std::accumulate(ports_.begin(), ports_.end(), 0,
-                         [](uint8_t sum, const std::unique_ptr<Port>& port) {
-                           return sum + port->GetPowerUsage();
-                         });
-}
-
-uint8_t PortManager::GetPortsStatus(
-    const std::function<bool(const std::unique_ptr<Port>&)>& predicate) const {
-  uint8_t status = 0;
-  for (uint8_t i = 0; i < NUM_PORTS; i++) {
-    if (predicate(ports_[i])) {
-      status |= (1 << i);
+uint16_t PortManager::GetPortsPowerUsage() const {
+  uint16_t usage = 0;
+  this->ForEach([&usage](const Port& port) {
+    if (!port.Dead()) {
+      usage += port.GetPowerUsage();
     }
-  }
-  return status;
+  });
+  return usage;
 }
 
-uint8_t PortManager::GetPortsOpenStatus() const {
-  return GetPortsStatus(
-      [](const std::unique_ptr<Port>& port) { return port->IsOpen(); });
+uint8_t PortManager::GetPortsBitMask(PortPredicate predicate) const {
+  uint8_t bitMask = 0;
+  this->ForEach([&bitMask, &predicate](const Port& port) {
+    if (predicate(port)) {
+      bitMask |= (1 << port.Id());
+    }
+  });
+  return bitMask;
 }
 
-uint8_t PortManager::GetPortsAttachedStatus() const {
-  return GetPortsStatus(
-      [](const std::unique_ptr<Port>& port) { return port->Attached(); });
+uint8_t PortManager::GetOpenPortsBitMask() const {
+  return GetPortsBitMask([](const Port& port) { return port.IsOpen(); });
+}
+
+uint8_t PortManager::GetAttachedPortsBitMask() const {
+  return GetPortsBitMask([](const Port& port) { return port.Attached(); });
+}
+
+uint8_t PortManager::CountPorts(PortPredicate predicate) const {
+  return __builtin_popcount(this->GetPortsBitMask(predicate));
+}
+
+uint8_t PortManager::GetAttachedPortCount() const {
+  return CountPorts([](const Port& port) { return port.Attached(); });
 }
 
 uint8_t PortManager::GetActivePortCount() const {
-  return static_cast<uint8_t>(std::count_if(
-      ports_.begin(), ports_.end(),
-      [](const std::unique_ptr<Port>& port) { return !port->Dead(); }));
-}
-
-uint8_t PortManager::GetAttachedAndAdjustablePortCount() const {
-  return static_cast<uint8_t>(std::count_if(
-      ports_.begin(), ports_.end(), [](const std::unique_ptr<Port>& port) {
-        return port->Attached() && port->IsAdjustable();
-      }));
+  return CountPorts([](const Port& port) { return !port.Dead(); });
 }
 
 uint32_t PortManager::GetChargingDurationSeconds() const {
@@ -273,22 +212,6 @@ uint32_t PortManager::GetChargingDurationSeconds() const {
     return 0;
   }
   return (now - charging_at_) / 1e3;  // to seconds
-}
-
-std::array<uint8_t, NUM_PORTS> PortManager::GetPortsMinPower() const {
-  std::array<uint8_t, NUM_PORTS> min_power;
-  for (const Port& port : *this) {
-    min_power[port.Id()] = port.MinPowerCap();
-  }
-  return min_power;
-}
-
-std::array<uint8_t, NUM_PORTS> PortManager::GetPortsMaxPower() const {
-  std::array<uint8_t, NUM_PORTS> max_power;
-  for (const Port& port : *this) {
-    max_power[port.Id()] = port.MaxPowerCap();
-  }
-  return max_power;
 }
 
 std::array<uint8_t, NUM_PORTS> PortManager::GetAllPortsPowerUsage() {
@@ -315,20 +238,28 @@ void PortManager::EnqueueUARTMessage(const uart_message_t& uart_msg,
   if (res != pdPASS) {
     ESP_LOGE(TAG,
              "Failed to enqueue UART message: 0x%04x from port %d, res: %d",
-             uart_msg.command, port_id, res);
+             uart_msg.command, port_id, (int)res);
   }
 }
 
 void PortManager::HandleUARTMessage(const PortManagerEvent& event) {
   uart_message_t uart_msg = event.uart_msg;
+  ESP_LOGD(TAG, "Received UART message: 0x%04x from port %d", uart_msg.command,
+           event.port_id);
   ESP_LOG_BUFFER_HEXDUMP(TAG, &uart_msg, uart_msg.length + 10, ESP_LOG_DEBUG);
+
   uint8_t port_id = event.port_id;
+  if (port_id == BCAST_ADDR) {
+    return HandleBroadcastMessage(uart_msg);
+  }
+
   ENSURE_PORT_ID(port_id);
   Port* port = ports_[port_id].get();
   if (port == nullptr) {
     ESP_LOGE(TAG, "Invalid port ID: %d", port_id);
     return;
   }
+
   switch (uart_msg.command) {
     case SW3566Command::GET_PORT_DETAILS: {
       HandlePortDetailsMessage(*port, uart_msg);
@@ -348,6 +279,9 @@ void PortManager::HandleUARTMessage(const PortManagerEvent& event) {
     case SW3566Command::KEEP_ALIVE: {
       HandleKeepAliveMessage(*port, uart_msg);
     } break;
+    case SW3566Command::GET_PD_PCAP_DATA: {
+      HandlePDPCapDataMessage(*port, uart_msg);
+    } break;
     default: {
       ESP_LOGW(TAG, "Unhandled UART command: 0x%04x from port %d",
                uart_msg.command, port_id);
@@ -356,6 +290,22 @@ void PortManager::HandleUARTMessage(const PortManagerEvent& event) {
     } break;
   }
   port->Update();
+}
+
+void PortManager::HandleBroadcastMessage(const uart_message_t& uart_msg) {
+  ESP_LOGD(TAG, "Received broadcast message: 0x%04x", uart_msg.command);
+  ESP_LOG_BUFFER_HEXDUMP(TAG, uart_msg.payload, uart_msg.length, ESP_LOG_DEBUG);
+  uint8_t src = uart_msg.addr >> 4;
+  switch (uart_msg.command) {
+    case SW3566Command::INVALID_COMMAND: {
+      ESP_LOGW(TAG, "Invalid command error from port %d", src);
+      ESP_LOG_BUFFER_HEXDUMP(TAG, (const uint8_t*)&uart_msg,
+                             UART_MESSAGE_LENGTH(uart_msg), ESP_LOG_WARN);
+    } break;
+    default: {
+      ESP_LOGW(TAG, "Unhandled broadcast command: 0x%04x", uart_msg.command);
+    } break;
+  }
 }
 
 void PortManager::HandlePortDetailsMessage(Port& port,
@@ -434,6 +384,8 @@ void PortManager::HandleChargingAlert(Port& port,
            static_cast<float>(alert.power_output * 3 * 8) / 1000000,
            alert.max_power, alert.watermark, alert.gpio_toggled,
            alert.rapid_reconnect);
+  ESP_LOGI(TAG, "Port[%d] requests voltage: %d", port.Id(),
+           alert.vin_voltage_request);
 
   pd_rx_hard_reset_count_ += alert.pd_rx_hard_reset;
   pd_rx_error_count_ += alert.pd_rx_error;
@@ -449,6 +401,36 @@ void PortManager::HandleKeepAliveMessage(Port& port,
            "ms, reboot reason: 0x%" PRIX32,
            port.Id(), resp.status, resp.uptimeMS, resp.rebootReason);
 }
+
+#ifdef CONFIG_MCU_MODEL_SW3566
+void PortManager::HandlePDPCapDataMessage(Port& port,
+                                          const uart_message_t& uart_msg) {
+  ESP_LOGD(TAG, "Received PD_PCAP_DATA from port %d", port.Id());
+
+  constexpr size_t fixed_size = sizeof(PcapEntry);
+  if (uart_msg.length < fixed_size) {
+    ESP_LOGE(TAG, "Invalid PD_PCAP_DATA length: %d", uart_msg.length);
+    return;
+  }
+  ESP_LOG_BUFFER_HEXDUMP(TAG, uart_msg.payload, uart_msg.length, ESP_LOG_DEBUG);
+
+#ifndef CONFIG_IDF_TARGET_LINUX
+  ESP_LOGD(TAG, "UART msg len: %d, header len: %d, payload len: %d",
+           uart_msg.length, fixed_size, uart_msg.length - fixed_size);
+#endif
+
+  PcapEntry* entry = static_cast<PcapEntry*>(malloc(uart_msg.length));
+  memcpy(entry, uart_msg.payload, uart_msg.length);
+  ESP_LOGD(TAG,
+           "PcapEntry - ts: %d, dir: %d, sop: %d, ser: %d, len: %d, vout: %d, "
+           "iout: %d",
+           entry->timestamp, entry->header.direction, entry->header.sop,
+           entry->header.serial, entry->length, entry->vout, entry->iout);
+  TelemetryTask& task = TelemetryTask::GetInstance();
+  task.ReportPDPCapData(port.Id(), *entry);
+  free(entry);
+}
+#endif
 #endif
 
 void PortManager::CheckAttachedPort(const Port& port) {
@@ -462,4 +444,32 @@ void PortManager::CheckAttachedPort(const Port& port) {
     ESP_LOGD(TAG, "No ports attached");
     charging_at_ = -1;
   }
+}
+
+void PortManager::ForEach(ForEachCallback cb) {
+  if (xSemaphoreTake(mutex_, pdMS_TO_TICKS(1000)) != pdTRUE) {
+    // Handle failure
+    return;
+  }
+
+  for (Port& port : *this) {
+    cb(port);
+  }
+
+  xSemaphoreGive(mutex_);
+  return;
+}
+
+void PortManager::ForEach(ForEachConstCallback cb) const {
+  if (xSemaphoreTake(mutex_, pdMS_TO_TICKS(1000)) != pdTRUE) {
+    // Handle failure
+    return;
+  }
+
+  for (const Port& port : *this) {
+    cb(port);
+  }
+
+  xSemaphoreGive(mutex_);
+  return;
 }

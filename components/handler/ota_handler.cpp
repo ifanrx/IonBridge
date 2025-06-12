@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "ble.h"
+#include "controller.h"
 #include "esp_check.h"
 #include "esp_err.h"
 #include "esp_log.h"
@@ -16,8 +17,7 @@
 
 static const char *TAG = "OTAHandler";
 
-esp_err_t OTAHandler::StartOTA(AppContext &ctx,
-                               const std::vector<uint8_t> &request,
+esp_err_t OTAHandler::StartOTA(const std::vector<uint8_t> &request,
                                std::vector<uint8_t> &response) {
   firmware_version new_version;
 
@@ -51,13 +51,15 @@ esp_err_t OTAHandler::StartOTA(AppContext &ctx,
 
   // De-initialize BLE stack to release resources
   ble_deinit();
-  if (start_upgrade_task(&new_version) != ESP_OK) {
+  esp_err_t err = start_upgrade_task(&new_version);
+  DeviceController &controller = DeviceController::GetInstance();
+  if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
     ESP_LOGE(TAG, "Failed to start upgrade task, rebooting in 2 seconds");
-    ctx.controller.reboot_after(2 * 1000);
+    controller.reboot_after(2 * 1000);
     return ESP_FAIL;
   }
 
   ESP_LOGI(TAG, "OTA precheck passed, starting actual upgrade");
-  ctx.controller.set_upgrading(true);
+  controller.set_upgrading(true);
   return ESP_OK;
 }

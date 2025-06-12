@@ -8,8 +8,6 @@
 #include <iterator>
 #include <memory>
 
-#include "data_types.h"
-#include "esp_err.h"
 #include "freertos/FreeRTOS.h"  // IWYU pragma: keep
 #include "freertos/idf_additions.h"
 #include "freertos/task.h"
@@ -20,9 +18,13 @@
 #include "uart.h"
 #endif
 
+using PortPredicate = std::function<bool(const Port&)>;
+using ForEachCallback = std::function<void(Port&)>;
+using ForEachConstCallback = std::function<void(const Port&)>;
+
 #ifdef CONFIG_MCU_MODEL_SW3566
 constexpr uint8_t NUM_PORTS = CONFIG_SW3566_COUNT;
-#elif defined(CONFIG_MCU_MODEL_FAKE_SW3566)
+#elifdef CONFIG_MCU_MODEL_FAKE_SW3566
 constexpr uint8_t NUM_PORTS = CONFIG_FAKE_SW3566_COUNT;
 #endif
 
@@ -117,12 +119,31 @@ class PortManager {
   PortManager(const PortManager&) = delete;
   PortManager& operator=(const PortManager&) = delete;
 
+  size_t Size() const { return ports_.size(); }
+
   void StartTask();
 
 #ifdef CONFIG_INTERFACE_TYPE_UART
   void EnqueueUARTMessage(const uart_message_t& uart_msg, uint8_t port_id);
 #endif
 
+  bool InitializePort(uint8_t port_id, bool active,
+                      uint8_t initial_power_budget);
+  Port* GetPort(uint8_t port_id);
+
+  void ForEach(ForEachCallback cb);
+  void ForEach(ForEachConstCallback cb) const;
+
+  // All ports data functions
+  uint16_t GetPortsPowerUsage() const;
+  uint8_t GetPortsBitMask(PortPredicate predicate) const;
+  uint8_t GetOpenPortsBitMask() const;
+  uint8_t GetAttachedPortsBitMask() const;
+  uint8_t GetAttachedPortCount() const;
+  uint8_t GetActivePortCount() const;
+  uint8_t CountPorts(PortPredicate predicate) const;
+
+  uint32_t GetChargingDurationSeconds() const;
   uint32_t GetChargingAt() const {
     if (charging_at_ == -1) {
       return 0;
@@ -130,87 +151,6 @@ class PortManager {
     return charging_at_;
   }
 
-  bool InitializePort(uint8_t port_id, bool active,
-                      uint8_t initial_power_budget);
-  Port* GetPort(uint8_t port_id);
-
-  // Port control functions
-  bool TurnOnPort(uint8_t port_id) {
-    if (port_id >= NUM_PORTS) {
-      return false;
-    }
-    return ports_[port_id]->Open();
-  }
-  bool TurnOffPort(uint8_t port_id) {
-    if (port_id >= NUM_PORTS) {
-      return false;
-    }
-    return ports_[port_id]->Close();
-  }
-  bool TogglePort(uint8_t port_id) {
-    if (port_id >= NUM_PORTS) {
-      return false;
-    }
-    return ports_[port_id]->Toggle();
-  }
-  void TurnOnAllPorts() {
-    for (Port& port : *this) {
-      port.Open();
-    }
-  }
-  void TurnOffAllPorts() {
-    for (Port& port : *this) {
-      port.Close();
-    }
-  }
-  void ShutdownAllPorts() {
-    for (Port& port : *this) {
-      port.Shutdown();
-    }
-  }
-
-  // Port stats functions
-  const HistoricalStatsData& GetHistoricalStats(uint8_t port_id) const {
-    if (port_id >= NUM_PORTS) {
-      return dummy_stats_data_;
-    }
-    return ports_[port_id]->GetHistoricalStats();
-  }
-  size_t GetHistoricalStatsSize(uint8_t port_id) const {
-    if (port_id >= NUM_PORTS) {
-      return 0;
-    }
-    return ports_[port_id]->GetHistoricalStatsSize();
-  }
-
-  // Single port data functions
-  esp_err_t GetPortData(uint8_t port_id, uint8_t* fc_protocol,
-                        uint8_t* temperature, uint16_t* current,
-                        uint16_t* voltage) const;
-  uint32_t GetPortChargingDurationSeconds(uint8_t port_id) const;
-  esp_err_t GetPortPDStatus(uint8_t port_id, ClientPDStatus* pd_status) const;
-  esp_err_t GetPortPowerFeatures(uint8_t port_id,
-                                 PowerFeatures* features) const;
-  esp_err_t SetPortPowerFeatures(uint8_t port_id,
-                                 const PowerFeatures& features);
-  esp_err_t SetPortConfig(uint8_t port_id, const PortConfig& config);
-  esp_err_t SetPortConfig(const Port& port, const PortConfig& config) {
-    return SetPortConfig(port.Id(), config);
-  }
-
-  // All ports data functions
-  uint8_t GetPortsPowerUsage() const;
-  uint8_t GetPortsOpenStatus() const;
-  uint8_t GetPortsAttachedStatus() const;
-  uint8_t GetActivePortCount() const;
-  uint8_t GetAttachedPortCount() const {
-    return __builtin_popcount(attaced_ports_);
-  }
-  uint8_t GetAttachedAndAdjustablePortCount() const;
-
-  uint32_t GetChargingDurationSeconds() const;
-  std::array<uint8_t, NUM_PORTS> GetPortsMinPower() const;
-  std::array<uint8_t, NUM_PORTS> GetPortsMaxPower() const;
   std::array<uint8_t, NUM_PORTS> GetAllPortsPowerUsage();
 
   // Iterator classes
@@ -316,22 +256,16 @@ class PortManager {
   }
   auto GetAlivePorts() {
     return FilteredPorts([](const Port& port) {
-      return !(port.Dead() || port.IsChecking() || port.IsPowerLimiting());
+      return !(port.Abnormal() || port.IsPowerLimiting());
     });
-  }
-
-  size_t Size() const { return ports_.size(); }
-  bool Empty() const { return ports_.empty(); }
-
-  void UpdateAlivePortsStage() {
-    for (Port& port : this->GetAlivePorts()) {
-      port.Update();
-    }
   }
 
  private:
   PortManager();
   ~PortManager();
+
+  // Thread safety
+  mutable SemaphoreHandle_t mutex_;
 
   // Task handle
   static void TaskLoopWrapper(void* pvParameters);
@@ -343,9 +277,6 @@ class PortManager {
   // Ports managed by PortManager
   std::array<std::unique_ptr<Port>, NUM_PORTS> ports_;
 
-  // Dummy RingBuffer for out of range access
-  HistoricalStatsData dummy_stats_data_;
-
   uint32_t charging_at_ = -1;
   uint8_t attaced_ports_ = 0;
   uint16_t pd_rx_hard_reset_count_ = 0;
@@ -353,19 +284,19 @@ class PortManager {
   uint16_t pd_rx_cable_reset_count_ = 0;
 
   // Helper function
-  uint8_t GetPortsStatus(
-      const std::function<bool(const std::unique_ptr<Port>&)>& predicate) const;
   void CheckAttachedPort(const Port& port);
 
   // Handler functions
 #ifdef CONFIG_INTERFACE_TYPE_UART
   void HandleUARTMessage(const PortManagerEvent& event);
+  void HandleBroadcastMessage(const uart_message_t& uart_msg);
   void HandlePortDetailsMessage(Port& port, const uart_message_t& uart_msg);
   void HandlePDStatusMessage(Port& port, const uart_message_t& uart_msg);
   void HandleInvalidCommandError(Port& port, const uart_message_t& uart_msg);
   void HandleUncorrectableError(Port& port, const uart_message_t& uart_msg);
   void HandleChargingAlert(Port& port, const uart_message_t& uart_msg);
   void HandleKeepAliveMessage(Port& port, const uart_message_t& uart_msg);
+  void HandlePDPCapDataMessage(Port& port, const uart_message_t& uart_msg);
 #endif
 };
 

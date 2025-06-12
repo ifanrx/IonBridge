@@ -6,14 +6,23 @@ idf_component_register(
   "include"
   REQUIRES
   app
+  service
   PRIV_REQUIRES
-  animation
   ble
+  chip_data_types
+  controller
+  display
   efuse
   esp_http_client
+  esp_timer
   esp_wifi
   firmware
   logging
+  machine_info
   nvs_data
+  port
+  power
+  rpc
   task
+  utils
   wifi)

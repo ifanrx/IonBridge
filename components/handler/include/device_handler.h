@@ -5,81 +5,66 @@
 #include <cstdint>
 #include <vector>
 
-#include "app.h"
 #include "esp_err.h"
-
-#define PORT_NUMBER CONFIG_SW3566_COUNT
+#include "sdkconfig.h"
 
 namespace DeviceHandler {
-esp_err_t AssociateDevice(AppContext &ctx, const std::vector<uint8_t> &request,
+esp_err_t AssociateDevice(const std::vector<uint8_t> &request,
                           std::vector<uint8_t> &response);
-esp_err_t ResetDevice(AppContext &ctx, const std::vector<uint8_t> &request,
+esp_err_t ResetDevice(const std::vector<uint8_t> &request,
                       std::vector<uint8_t> &response);
-esp_err_t RebootDevice(AppContext &ctx, const std::vector<uint8_t> &request,
+esp_err_t RebootDevice(const std::vector<uint8_t> &request,
                        std::vector<uint8_t> &response);
-esp_err_t GetAPVersion(AppContext &ctx, const std::vector<uint8_t> &request,
+esp_err_t GetAPVersion(const std::vector<uint8_t> &request,
                        std::vector<uint8_t> &response);
-esp_err_t GetBPVersion(AppContext &ctx, const std::vector<uint8_t> &request,
+#ifdef CONFIG_MCU_MODEL_SW3566
+esp_err_t GetBPVersion(const std::vector<uint8_t> &request,
                        std::vector<uint8_t> &response);
-esp_err_t GetFPGAVersion(AppContext &ctx, const std::vector<uint8_t> &request,
+esp_err_t GetFPGAVersion(const std::vector<uint8_t> &request,
                          std::vector<uint8_t> &response);
-esp_err_t GetZRLIBVersion(AppContext &ctx, const std::vector<uint8_t> &request,
+esp_err_t GetZRLIBVersion(const std::vector<uint8_t> &request,
                           std::vector<uint8_t> &response);
-esp_err_t GetDeviceSerialNumber(AppContext &ctx,
-                                const std::vector<uint8_t> &request,
-                                std::vector<uint8_t> &response);
-esp_err_t GetDeviceUpTime(AppContext &ctx, const std::vector<uint8_t> &request,
-                          std::vector<uint8_t> &response);
-esp_err_t SwitchDevice(AppContext &ctx, const std::vector<uint8_t> &request,
-                       std::vector<uint8_t> &response);
-esp_err_t GetDeviceSwitch(AppContext &ctx, const std::vector<uint8_t> &request,
-                          std::vector<uint8_t> &response);
-esp_err_t GetDeviceModel(AppContext &ctx, const std::vector<uint8_t> &request,
-                         std::vector<uint8_t> &response);
-esp_err_t GetSecureBootDigest(AppContext &ctx,
-                              const std::vector<uint8_t> &request,
-                              std::vector<uint8_t> &response);
-esp_err_t PingMQTTTelemetry(AppContext &ctx,
-                            const std::vector<uint8_t> &request,
-                            std::vector<uint8_t> &response);
-esp_err_t PushLicense(AppContext &ctx, const std::vector<uint8_t> &request,
-                      std::vector<uint8_t> &response);
-esp_err_t PingHTTP(AppContext &ctx, const std::vector<uint8_t> &request,
-                   std::vector<uint8_t> &response);
-esp_err_t GetDeviceInfo(AppContext &ctx, const std::vector<uint8_t> &request,
-                        std::vector<uint8_t> &response);
-esp_err_t SetSyslogState(AppContext &ctx, const std::vector<uint8_t> &request,
-                         std::vector<uint8_t> &response);
-esp_err_t GetDevicePassword(AppContext &ctx,
-                            const std::vector<uint8_t> &request,
-                            std::vector<uint8_t> &response);
-#ifdef CONFIG_ENABLE_RFTEST
-esp_err_t SetTestModeA(AppContext &ctx, const std::vector<uint8_t> &request,
-                       std::vector<uint8_t> &response);
-esp_err_t SetTestModeB(AppContext &ctx, const std::vector<uint8_t> &request,
-                       std::vector<uint8_t> &response);
 #endif
-
-esp_err_t ManageFPGAConfig(AppContext &ctx, const std::vector<uint8_t> &request,
-                           std::vector<uint8_t> &response);
-esp_err_t ManagePowerAllocatorEnabled(AppContext &ctx,
-                                      const std::vector<uint8_t> &request,
-                                      std::vector<uint8_t> &response);
-esp_err_t ManagePowerConfig(AppContext &ctx,
-                            const std::vector<uint8_t> &request,
-                            std::vector<uint8_t> &response);
-esp_err_t SetSystemTime(AppContext &ctx, const std::vector<uint8_t> &request,
-                        std::vector<uint8_t> &response);
-esp_err_t GetDebugLog(AppContext &ctx, const std::vector<uint8_t> &request,
-                      std::vector<uint8_t> &response);
-esp_err_t ManageFeatureToggle(AppContext &ctx,
-                              const std::vector<uint8_t> &request,
+esp_err_t GetDeviceSerialNumber(const std::vector<uint8_t> &request,
+                                std::vector<uint8_t> &response);
+esp_err_t GetDeviceUpTime(const std::vector<uint8_t> &request,
+                          std::vector<uint8_t> &response);
+esp_err_t SwitchDevice(const std::vector<uint8_t> &request,
+                       std::vector<uint8_t> &response);
+esp_err_t GetDeviceSwitch(const std::vector<uint8_t> &request,
+                          std::vector<uint8_t> &response);
+esp_err_t GetDeviceModel(const std::vector<uint8_t> &request,
+                         std::vector<uint8_t> &response);
+esp_err_t GetSecureBootDigest(const std::vector<uint8_t> &request,
                               std::vector<uint8_t> &response);
-esp_err_t EnableReleaseMode(AppContext &ctx,
-                            const std::vector<uint8_t> &request,
+esp_err_t PingMQTTTelemetry(const std::vector<uint8_t> &request,
                             std::vector<uint8_t> &response);
-esp_err_t GetHardwareRevision(AppContext &ctx,
-                              const std::vector<uint8_t> &request,
+esp_err_t PushLicense(const std::vector<uint8_t> &request,
+                      std::vector<uint8_t> &response);
+esp_err_t PingHTTP(const std::vector<uint8_t> &request,
+                   std::vector<uint8_t> &response);
+esp_err_t GetDeviceInfo(const std::vector<uint8_t> &request,
+                        std::vector<uint8_t> &response);
+esp_err_t SetSyslogState(const std::vector<uint8_t> &request,
+                         std::vector<uint8_t> &response);
+esp_err_t GetDevicePassword(const std::vector<uint8_t> &request,
+                            std::vector<uint8_t> &response);
+
+esp_err_t ManageFPGAConfig(const std::vector<uint8_t> &request,
+                           std::vector<uint8_t> &response);
+esp_err_t ManagePowerAllocatorEnabled(const std::vector<uint8_t> &request,
+                                      std::vector<uint8_t> &response);
+esp_err_t ManagePowerConfig(const std::vector<uint8_t> &request,
+                            std::vector<uint8_t> &response);
+esp_err_t SetSystemTime(const std::vector<uint8_t> &request,
+                        std::vector<uint8_t> &response);
+esp_err_t GetDebugLog(const std::vector<uint8_t> &request,
+                      std::vector<uint8_t> &response);
+esp_err_t ManageFeatureToggle(const std::vector<uint8_t> &request,
+                              std::vector<uint8_t> &response);
+esp_err_t EnableReleaseMode(const std::vector<uint8_t> &request,
+                            std::vector<uint8_t> &response);
+esp_err_t GetHardwareRevision(const std::vector<uint8_t> &request,
                               std::vector<uint8_t> &response);
 };  // namespace DeviceHandler
 

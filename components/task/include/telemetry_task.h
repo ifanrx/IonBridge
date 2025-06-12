@@ -1,67 +1,69 @@
 #ifndef TELEMETRYTASK_H_
 #define TELEMETRYTASK_H_
 
+#include <cstddef>
 #include <cstdint>
-#include <memory>
-#include <mutex>
 
-#include "controller.h"
 #include "esp_err.h"
+#include "freertos/idf_additions.h"
 #include "mqtt_message.h"
-#include "power_allocator.h"
 #include "sdkconfig.h"
 #include "version.h"
 
-#define CHECK_MQTT_CONNECTED()                                     \
-  ({                                                               \
-    if (!MQTTClient::GetInstance()->Connected()) {                 \
-      ESP_LOGD(TAG, "MQTT client is not started yet, skipping %s", \
-               __FUNCTION__);                                      \
-      return;                                                      \
-    }                                                              \
-  })
+#ifdef CONFIG_MCU_MODEL_SW3566
+#include "sw3566_data_types.h"
+#endif
 
 class TelemetryTask {
-  // Singleton
-  static std::unique_ptr<TelemetryTask> instance_;
-  static std::mutex mutex_;
-
   // Member variables
-  PowerAllocator &allocator_;
-  DeviceController &controller_;
-  volatile int64_t telemetry_stream_subscribed_at_ = -1;
+  static constexpr int64_t kSubscribeTimeoutUs = 2 * 60 * 1e6;
+  volatile int64_t subscribed_at_ = -1;
   volatile bool paused = false;
-  int64_t telemetry_stream_subscribe_timeout_us_ = 2 * 60 * 1e6;
+  bool debug_ = false, started_ = false;
+  TaskHandle_t task_handle_;
+  QueueHandle_t mqtt_msg_queue_;
+
+  // Buffer pool configuration
+  using BufferId = uint8_t;
+  using BufferType = uint8_t *;
+
+  static constexpr uint32_t kMutexTimeoutMs = 50;
+  static constexpr BufferId INVALID_BUFFER_ID = 0xFF;
+  static constexpr size_t BUFFER_SIZE = 272;
+  static constexpr size_t BUFFER_COUNT = 32;
+
+  BufferType msg_buffers_[BUFFER_COUNT];
+  size_t msg_buffer_sizes_[BUFFER_COUNT] = {0};
+  SemaphoreHandle_t buffer_mutex_;
 
   // Private constructor
-  TelemetryTask(PowerAllocator &powerAllocator,
-                DeviceController &espController);
+  TelemetryTask() = default;
+  ~TelemetryTask();
+
+  static void TaskLoopWrapper(void *pvParameters);
+  void TaskLoop();
+  void ReportMQTTMessage(const MQTTMessage &msg);
+
+  void InitBufferPool();
+  BufferId AcquireBuffer(size_t buffer_size);
+  void ReleaseBuffer(BufferId buffer_id);
+  BufferType GetBuffer(BufferId buffer_id);
+  size_t GetBufferSize(BufferId buffer_id);
 
  public:
   // Delete copy constructor and assignment operator
   TelemetryTask(TelemetryTask const &) = delete;
   TelemetryTask &operator=(TelemetryTask const &) = delete;
 
-  // Static method to initialize the singleton instance
-  static bool Initialize(PowerAllocator &powerAllocator,
-                         DeviceController &controller) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (!instance_) {
-      instance_.reset(new TelemetryTask(powerAllocator, controller));
-      return true;
-    }
-    return false;
-  }
-
   // Static method to get the singleton instance
-  static TelemetryTask *GetInstance() {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return instance_.get();
+  static TelemetryTask &GetInstance() {
+    static TelemetryTask instance;
+    return instance;
   }
-
-  PowerAllocator &GetPowerAllocator();
 
   void Start();
+  bool IsDebug() { return debug_; }
+  void SetDebug(bool debug) { debug_ = debug; }
 
   void ReportDeviceBootInfo();
   void ReportMqttConnectionTime();
@@ -76,23 +78,13 @@ class TelemetryTask {
                               UpgradeFailureReason reason, esp_err_t esp_err);
 
 #ifdef CONFIG_MCU_MODEL_SW3566
-  void ReportSW3566UpgradeError(const Version &version, esp_err_t err);
-  void ReportSW3566UpgradeInfo(const Version &version, UpgradeStatus status,
-                               UpgradeFailureReason reason, esp_err_t esp_err);
-
-  void ReportFPGAUpgradeError(const Version &version, esp_err_t err);
-  void ReportFPGAUpgradeInfo(const Version &version, UpgradeStatus status,
-                             UpgradeFailureReason reason, esp_err_t esp_err);
+  void ReportPDPCapData(uint8_t port, PcapEntry &pcap_entry);
 #endif
 
   esp_err_t ReportPingInfo();
   void ReportOTAConfirmInfo();
 
   void RequestLicense();
-
-  void ReportStreamPortsStatus();
-  void ReportStreamDeviceStatus();
-  void ReportStreamPortPDStatus();
 
   void RequestShutdownBle();
 
@@ -104,11 +96,10 @@ class TelemetryTask {
   void Pause();
   void Resume();
 
-  uint16_t GetMessageId();
+  void ReportPowerAllocationData(uint16_t power_budget,
+                                 uint16_t remaining_power);
 
-  void ReportPowerAllocationData(
-      uint16_t power_budget, uint8_t temperature, uint16_t remaining_power,
-      uint16_t adc_value, const PortPowerAllocation port_power_allocations[8]);
+  void ReportOutOfMemory(uint32_t caps) const;
 };
 
 #endif

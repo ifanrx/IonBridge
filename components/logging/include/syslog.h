@@ -68,7 +68,7 @@ class SyslogClient {
   /**
    * @brief Register syslog to esp log system
    */
-  void Register();
+  void Register(bool remote = false);
 
   /**
    * @brief Cleans up the SyslogClient by closing the socket.
@@ -87,11 +87,9 @@ class SyslogClient {
   /**
    * @brief Initializes the SyslogClient.
    *
-   * @param serial_number Pointer to the device serial number string.
-   * @param serial_number_length Length of the serial number string.
    * @return bool True on success, False on failure.
    */
-  bool Initialize(const char* serial_number, size_t serial_number_length);
+  bool InitializeClient();
 
   /**
    * @brief Resolves the syslog server hostname to an IPv4 address.
@@ -122,6 +120,7 @@ class SyslogClient {
   SemaphoreHandle_t syslog_mutex_;  // Mutex for thread safety
   TickType_t semaphore_timeout_;    // Timeout for waiting on the semaphore
   bool report_enabled_;             // Flag indicating if reporting is enabled
+  bool remote_reporting_;  // Flag indicating if remote reporting is enabled
   vprintf_like_t esp_printf_ = nullptr;  // Original esp printf function
 #endif
 };

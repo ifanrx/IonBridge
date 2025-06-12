@@ -8,7 +8,7 @@
 #include <cstring>
 #include <vector>
 
-#include "app.h"
+#include "controller.h"
 #include "esp_check.h"
 #include "esp_efuse.h"
 #include "esp_err.h"
@@ -21,6 +21,7 @@
 #include "nvs_default.h"
 #include "nvs_namespace.h"
 #include "nvs_partition.h"
+#include "port_manager.h"
 #include "power_allocator.h"
 #include "power_config.h"
 #include "sdkconfig.h"
@@ -42,8 +43,7 @@ enum ManageFeature {
   FPGA_POWER_CONTROL = 0,
 };
 
-esp_err_t DeviceHandler::GetAPVersion(AppContext &ctx,
-                                      const std::vector<uint8_t> &request,
+esp_err_t DeviceHandler::GetAPVersion(const std::vector<uint8_t> &request,
                                       std::vector<uint8_t> &response) {
   std::array<uint8_t, 3> esp32_version =
       MachineInfo::GetInstance().GetESP32Version();
@@ -56,8 +56,7 @@ esp_err_t DeviceHandler::GetAPVersion(AppContext &ctx,
   return ESP_OK;
 }
 
-esp_err_t DeviceHandler::AssociateDevice(AppContext &ctx,
-                                         const std::vector<uint8_t> &request,
+esp_err_t DeviceHandler::AssociateDevice(const std::vector<uint8_t> &request,
                                          std::vector<uint8_t> &response) {
   size_t password_len = 0;
   bool reset_data = true;
@@ -76,20 +75,21 @@ esp_err_t DeviceHandler::AssociateDevice(AppContext &ctx,
     ESP_RETURN_ON_ERROR(ResetUserData(), TAG, "reset_user_data");
     WiFiManager::GetInstance().Reset();
     wifi_controller.Abort();
-    if (ctx.pAllocator.Type() == PowerAllocatorType::TEMPORARY_ALLOCATOR) {
-      ctx.pAllocator.SetStrategy<PowerSlowChargingStrategy>();
+    PowerAllocator &allocator = PowerAllocator::GetInstance();
+    if (allocator.Type() == PowerAllocatorType::TEMPORARY_ALLOCATOR) {
+      allocator.SetStrategy<PowerSlowChargingStrategy>();
     }
   }
   uint8_t token;
   ESP_RETURN_ON_ERROR(NVSGetAuthToken(&token, reset_data), TAG,
                       "Failed to get token");
 
+  DeviceController::GetInstance().mark_associated();
   response.emplace_back(token);
   return ESP_OK;
 }
 
-esp_err_t DeviceHandler::ResetDevice(AppContext &ctx,
-                                     const std::vector<uint8_t> &request,
+esp_err_t DeviceHandler::ResetDevice(const std::vector<uint8_t> &request,
                                      std::vector<uint8_t> &response) {
   ESP_LOGW(TAG, "Client request to reset device");
   NVSPartition partition(USER_DATA_NVS_PARTITION);
@@ -97,21 +97,19 @@ esp_err_t DeviceHandler::ResetDevice(AppContext &ctx,
     return ESP_FAIL;
   }
 
-  ctx.controller.reboot_after(3000);
+  DeviceController::GetInstance().reboot_after(1000);
   return ESP_OK;
 }
 
-esp_err_t DeviceHandler::RebootDevice(AppContext &ctx,
-                                      const std::vector<uint8_t> &request,
+esp_err_t DeviceHandler::RebootDevice(const std::vector<uint8_t> &request,
                                       std::vector<uint8_t> &response) {
   ESP_LOGW(TAG, "Client request to reboot device");
-  ctx.controller.reboot_after(3000);
+  DeviceController::GetInstance().reboot_after(1000);
   return ESP_OK;
 }
 
 esp_err_t DeviceHandler::GetDeviceSerialNumber(
-    AppContext &ctx, const std::vector<uint8_t> &request,
-    std::vector<uint8_t> &response) {
+    const std::vector<uint8_t> &request, std::vector<uint8_t> &response) {
   const std::string &serial_number = MachineInfo::GetInstance().GetPSN();
   ESP_RETURN_ON_FALSE(!serial_number.empty(), ESP_FAIL, TAG,
                       "Serial number is empty");
@@ -119,8 +117,7 @@ esp_err_t DeviceHandler::GetDeviceSerialNumber(
   return ESP_OK;
 }
 
-esp_err_t DeviceHandler::GetDeviceUpTime(AppContext &ctx,
-                                         const std::vector<uint8_t> &request,
+esp_err_t DeviceHandler::GetDeviceUpTime(const std::vector<uint8_t> &request,
                                          std::vector<uint8_t> &response) {
   int64_t uptime = esp_timer_get_time();
   EMPLACE_BACK_INT64(response, uptime);
@@ -128,8 +125,7 @@ esp_err_t DeviceHandler::GetDeviceUpTime(AppContext &ctx,
 }
 
 #ifdef CONFIG_MCU_MODEL_SW3566
-esp_err_t DeviceHandler::GetBPVersion(AppContext &ctx,
-                                      const std::vector<uint8_t> &request,
+esp_err_t DeviceHandler::GetBPVersion(const std::vector<uint8_t> &request,
                                       std::vector<uint8_t> &response) {
   std::array<uint8_t, 3> bp_version =
       MachineInfo::GetInstance().GetMCUVersion();
@@ -139,8 +135,7 @@ esp_err_t DeviceHandler::GetBPVersion(AppContext &ctx,
   return ESP_OK;
 }
 
-esp_err_t DeviceHandler::GetFPGAVersion(AppContext &ctx,
-                                        const std::vector<uint8_t> &request,
+esp_err_t DeviceHandler::GetFPGAVersion(const std::vector<uint8_t> &request,
                                         std::vector<uint8_t> &response) {
   std::array<uint8_t, 3> fpga_version =
       MachineInfo::GetInstance().GetFPGAVersion();
@@ -151,8 +146,7 @@ esp_err_t DeviceHandler::GetFPGAVersion(AppContext &ctx,
   return ESP_OK;
 }
 
-esp_err_t DeviceHandler::GetZRLIBVersion(AppContext &ctx,
-                                         const std::vector<uint8_t> &request,
+esp_err_t DeviceHandler::GetZRLIBVersion(const std::vector<uint8_t> &request,
                                          std::vector<uint8_t> &response) {
   std::array<uint8_t, 3> zrlib_version =
       MachineInfo::GetInstance().GetZRLIBVersion();
@@ -162,10 +156,10 @@ esp_err_t DeviceHandler::GetZRLIBVersion(AppContext &ctx,
             std::back_inserter(response));
   return ESP_OK;
 }
+
 #endif
 
-esp_err_t DeviceHandler::SwitchDevice(AppContext &ctx,
-                                      const std::vector<uint8_t> &request,
+esp_err_t DeviceHandler::SwitchDevice(const std::vector<uint8_t> &request,
                                       std::vector<uint8_t> &response) {
 #define CLOSE 0
 #define OPEN 1
@@ -174,15 +168,16 @@ esp_err_t DeviceHandler::SwitchDevice(AppContext &ctx,
     return ESP_FAIL;
   }
   uint8_t device_switch = request[0];
+  DeviceController &controller = DeviceController::GetInstance();
   switch (device_switch) {
     case OPEN: {
       ESP_LOGI(TAG, "Switching device on");
-      return ctx.controller.power_on();
+      return controller.power_on();
       break;
     }
     case CLOSE: {
       ESP_LOGI(TAG, "Switching device off");
-      return ctx.controller.power_off();
+      return controller.power_off();
       break;
     }
     default: {
@@ -196,16 +191,14 @@ esp_err_t DeviceHandler::SwitchDevice(AppContext &ctx,
 #undef OPEN
 }
 
-esp_err_t DeviceHandler::GetDeviceSwitch(AppContext &ctx,
-                                         const std::vector<uint8_t> &request,
+esp_err_t DeviceHandler::GetDeviceSwitch(const std::vector<uint8_t> &request,
                                          std::vector<uint8_t> &response) {
-  bool opened = ctx.controller.is_power_on();
+  bool opened = DeviceController::GetInstance().is_power_on();
   response.emplace_back(static_cast<uint8_t>(opened));
   return ESP_OK;
 }
 
-esp_err_t DeviceHandler::GetDeviceModel(AppContext &ctx,
-                                        const std::vector<uint8_t> &request,
+esp_err_t DeviceHandler::GetDeviceModel(const std::vector<uint8_t> &request,
                                         std::vector<uint8_t> &response) {
   const std::string &model = MachineInfo::GetInstance().GetDeviceModel();
   response.insert(response.end(), model.begin(), model.end());
@@ -213,8 +206,7 @@ esp_err_t DeviceHandler::GetDeviceModel(AppContext &ctx,
 }
 
 esp_err_t DeviceHandler::GetSecureBootDigest(
-    AppContext &ctx, const std::vector<uint8_t> &request,
-    std::vector<uint8_t> &response) {
+    const std::vector<uint8_t> &request, std::vector<uint8_t> &response) {
   uint8_t key[32];
   ESP_RETURN_ON_ERROR(
       esp_efuse_read_block(EFUSE_BLK_KEY1, key, 0, sizeof(key) * 8), TAG,
@@ -225,19 +217,12 @@ esp_err_t DeviceHandler::GetSecureBootDigest(
   return ESP_OK;
 }
 
-esp_err_t DeviceHandler::PingMQTTTelemetry(AppContext &ctx,
-                                           const std::vector<uint8_t> &request,
+esp_err_t DeviceHandler::PingMQTTTelemetry(const std::vector<uint8_t> &request,
                                            std::vector<uint8_t> &response) {
-  TelemetryTask *task = TelemetryTask::GetInstance();
-  if (task == nullptr) {
-    ESP_LOGE(TAG, "Failed to get TelemetryTask instance");
-    return ESP_FAIL;
-  }
-  return task->ReportPingInfo();
+  return TelemetryTask::GetInstance().ReportPingInfo();
 }
 
-esp_err_t DeviceHandler::PushLicense(AppContext &ctx,
-                                     const std::vector<uint8_t> &request,
+esp_err_t DeviceHandler::PushLicense(const std::vector<uint8_t> &request,
                                      std::vector<uint8_t> &response) {
   if (request.size() <= 0) {
     ESP_LOGW(TAG, "Invalid license length: %d", request.size());
@@ -281,8 +266,7 @@ static esp_err_t _ping_http_event_handler(esp_http_client_event_t *evt) {
   return ESP_OK;
 }
 
-esp_err_t DeviceHandler::PingHTTP(AppContext &ctx,
-                                  const std::vector<uint8_t> &request,
+esp_err_t DeviceHandler::PingHTTP(const std::vector<uint8_t> &request,
                                   std::vector<uint8_t> &response) {
   if (request.size() == 0) {
     ESP_LOGE(TAG, "Invalid PingHTTP request length: %d", request.size());
@@ -321,8 +305,7 @@ struct DeviceInfo {
   uint8_t channel;
 };
 
-esp_err_t DeviceHandler::GetDeviceInfo(AppContext &ctx,
-                                       const std::vector<uint8_t> &request,
+esp_err_t DeviceHandler::GetDeviceInfo(const std::vector<uint8_t> &request,
                                        std::vector<uint8_t> &response) {
   MachineInfo &info = MachineInfo::GetInstance();
   struct DeviceInfo data = {};
@@ -361,8 +344,7 @@ esp_err_t DeviceHandler::GetDeviceInfo(AppContext &ctx,
   return ESP_OK;
 }
 
-esp_err_t DeviceHandler::SetSyslogState(AppContext &ctx,
-                                        const std::vector<uint8_t> &request,
+esp_err_t DeviceHandler::SetSyslogState(const std::vector<uint8_t> &request,
                                         std::vector<uint8_t> &response) {
   if (request.size() != 1) {
     ESP_LOGE(TAG, "Invalid SetSyslogState request length: %d", request.size());
@@ -371,8 +353,7 @@ esp_err_t DeviceHandler::SetSyslogState(AppContext &ctx,
   return SyslogClient::GetInstance().SetReportEnabled(request[0]);
 }
 
-esp_err_t DeviceHandler::GetDevicePassword(AppContext &ctx,
-                                           const std::vector<uint8_t> &request,
+esp_err_t DeviceHandler::GetDevicePassword(const std::vector<uint8_t> &request,
                                            std::vector<uint8_t> &response) {
   uint8_t password[4];
   ESP_RETURN_ON_ERROR(DeviceAuth::getPassword(password, sizeof(password)), TAG,
@@ -383,86 +364,8 @@ esp_err_t DeviceHandler::GetDevicePassword(AppContext &ctx,
   return ESP_OK;
 }
 
-#ifdef CONFIG_ENABLE_RFTEST
-esp_err_t DeviceHandler::SetTestModeA(AppContext &ctx,
-                                      const std::vector<uint8_t> &request,
-                                      std::vector<uint8_t> &response) {
-  uint32_t args[6];
-  if (request.size() != sizeof(args)) {
-    ESP_LOGE(TAG, "Invalid SetTestModeA request length: %d", request.size());
-    return ESP_FAIL;
-  }
-  std::memcpy(args, &request[0], sizeof(args));
-  ESP_RETURN_ON_ERROR(TestModeNVSData::SaveTestModeAArgs(args), TAG,
-                      "SaveTestModeAArgs");
-  return ESP_OK;
-}
-
-esp_err_t DeviceHandler::SetTestModeB(AppContext &ctx,
-                                      const std::vector<uint8_t> &request,
-                                      std::vector<uint8_t> &response) {
-  uint32_t args[6];
-  if (request.size() != sizeof(args)) {
-    ESP_LOGE(TAG, "Invalid SetTestModeB request length: %d", request.size());
-    return ESP_FAIL;
-  }
-  std::memcpy(args, &request[0], sizeof(args));
-  ESP_LOGI(TAG,
-           "SetTestModeB args: %" PRIu32 " %" PRIu32 " %" PRIu32 " %" PRIu32
-           " %" PRIu32 " %" PRIu32,
-           args[0], args[1], args[2], args[3], args[4], args[5]);
-  // todo
-  return ESP_OK;
-}
-#endif
-
-esp_err_t DeviceHandler::ManageFPGAConfig(AppContext &ctx,
-                                          const std::vector<uint8_t> &request,
-                                          std::vector<uint8_t> &response) {
-  if (request.size() == 0) {
-    ESP_LOGE(TAG, "Invalid ManageFPGAConfig request length: %d",
-             request.size());
-    return ESP_FAIL;
-  }
-  uint8_t action = request[0];
-  switch (action) {
-    case ManageActionType::GET: {
-      uint8_t data[3];
-      size_t size = sizeof(data);
-      ESP_ERROR_COMPLAIN(FPGANVSGetOrDefault(data, &size, NVSKey::FPGA_CONFIG),
-                         "FPGANVSData::GetConfigOrDefault");
-      response.emplace_back(data[0]);
-      response.emplace_back(data[1]);
-      response.emplace_back(data[2]);
-      return ESP_OK;
-      break;
-    }
-    case ManageActionType::SET: {
-      if (request.size() != 4) {
-        ESP_LOGE(TAG, "Invalid SetFPGAConfig request length: %d",
-                 request.size());
-        return ESP_FAIL;
-      }
-      ESP_LOGI(TAG,
-               "SetFPGAConfig: adc_threshold_low=%d adc_threshold_high=%d "
-               "action_deadzone=%d",
-               request[1], request[2], request[3]);
-      return FPGANVSSet(&request[1], NVSKey::FPGA_CONFIG, 3);
-      break;
-    }
-    case ManageActionType::RESET: {
-      return FPGANVSEraseKey(NVSKey::FPGA_CONFIG);
-    }
-    default: {
-      ESP_LOGE(TAG, "Invalid ManageFPGAConfig action: %d", action);
-      return ESP_FAIL;
-    }
-  }
-}
-
 esp_err_t DeviceHandler::ManagePowerAllocatorEnabled(
-    AppContext &ctx, const std::vector<uint8_t> &request,
-    std::vector<uint8_t> &response) {
+    const std::vector<uint8_t> &request, std::vector<uint8_t> &response) {
   if (request.size() == 0) {
     ESP_LOGE(TAG, "Invalid ManagePowerAllocatorEnabled request length: %d",
              request.size());
@@ -497,10 +400,9 @@ esp_err_t DeviceHandler::ManagePowerAllocatorEnabled(
   }
 }
 
-esp_err_t DeviceHandler::ManagePowerConfig(AppContext &ctx,
-                                           const std::vector<uint8_t> &request,
+esp_err_t DeviceHandler::ManagePowerConfig(const std::vector<uint8_t> &request,
                                            std::vector<uint8_t> &response) {
-  if (request.size() == 0) {
+  if (request.size() < 2) {
     ESP_LOGE(TAG, "Invalid ManagePowerConfig request length: %d",
              request.size());
     return ESP_ERR_INVALID_SIZE;
@@ -522,6 +424,11 @@ esp_err_t DeviceHandler::ManagePowerConfig(AppContext &ctx,
         return ESP_ERR_INVALID_SIZE;
       }
       ESP_LOGI(TAG, "SetPowerConfig");
+      uint8_t version = request[1];
+      if (version != kPowerConfigVersion) {
+        ESP_LOGE(TAG, "Invalid PowerConfig version: %d", version);
+        return ESP_ERR_INVALID_VERSION;
+      }
       PowerConfig config;
       std::memcpy(&config, &request[1], sizeof(PowerConfig));
       return set_power_config(config);
@@ -539,8 +446,7 @@ esp_err_t DeviceHandler::ManagePowerConfig(AppContext &ctx,
   return ESP_OK;
 }
 
-esp_err_t DeviceHandler::SetSystemTime(AppContext &ctx,
-                                       const std::vector<uint8_t> &request,
+esp_err_t DeviceHandler::SetSystemTime(const std::vector<uint8_t> &request,
                                        std::vector<uint8_t> &response) {
   if (request.size() != 4) {
     ESP_LOGE(TAG, "Invalid SetSystemTime request length: %d", request.size());
@@ -553,8 +459,7 @@ esp_err_t DeviceHandler::SetSystemTime(AppContext &ctx,
   return ESP_OK;
 }
 
-esp_err_t DeviceHandler::GetDebugLog(AppContext &ctx,
-                                     const std::vector<uint8_t> &request,
+esp_err_t DeviceHandler::GetDebugLog(const std::vector<uint8_t> &request,
                                      std::vector<uint8_t> &response) {
   size_t size = 1024;
   response.resize(size);
@@ -563,8 +468,7 @@ esp_err_t DeviceHandler::GetDebugLog(AppContext &ctx,
   return ESP_OK;
 }
 
-static esp_err_t manage_fpga_power_control(AppContext &ctx,
-                                           const std::vector<uint8_t> &request,
+static esp_err_t manage_fpga_power_control(const std::vector<uint8_t> &request,
                                            std::vector<uint8_t> &response,
                                            uint8_t action, uint8_t enabled) {
   switch (action) {
@@ -590,8 +494,7 @@ static esp_err_t manage_fpga_power_control(AppContext &ctx,
 }
 
 esp_err_t DeviceHandler::ManageFeatureToggle(
-    AppContext &ctx, const std::vector<uint8_t> &request,
-    std::vector<uint8_t> &response) {
+    const std::vector<uint8_t> &request, std::vector<uint8_t> &response) {
   if (request.size() < 3) {
     ESP_LOGE(TAG, "Invalid ManageFeatureToggle request length: %d",
              request.size());
@@ -604,26 +507,15 @@ esp_err_t DeviceHandler::ManageFeatureToggle(
   response.emplace_back(action);
   switch (feature) {
     case ManageFeature::FPGA_POWER_CONTROL: {
-      return manage_fpga_power_control(ctx, request, response, action, enabled);
+      return manage_fpga_power_control(request, response, action, enabled);
     }
   }
   return ESP_OK;
 }
 
-esp_err_t DeviceHandler::EnableReleaseMode(AppContext &ctx,
-                                           const std::vector<uint8_t> &request,
+esp_err_t DeviceHandler::EnableReleaseMode(const std::vector<uint8_t> &request,
                                            std::vector<uint8_t> &response) {
   return esp_efuse_disable_rom_download_mode();
-}
-
-esp_err_t DeviceHandler::GetHardwareRevision(
-    AppContext &ctx, const std::vector<uint8_t> &request,
-    std::vector<uint8_t> &response) {
-  char revision[8];
-  size_t size = sizeof(revision);
-  DeviceNVSGet(revision, &size, NVSKey::DEVICE_HARDWARE_REV);
-  response.insert(response.end(), revision, revision + size - 1);
-  return ESP_OK;
 }
 
 esp_err_t DeviceAuth::getPassword(uint8_t *password, size_t passwordSize) {

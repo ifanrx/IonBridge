@@ -5,10 +5,7 @@ idf_component_register(
   INCLUDE_DIRS
   "include"
   REQUIRES
-  controller
-  power
   service
   PRIV_REQUIRES
-  mqtt_app
-  nvs_data
-  version)
+  controller
+  power)

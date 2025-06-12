@@ -5,7 +5,7 @@
 
 #include "sdkconfig.h"
 
-enum ServiceCommand {
+enum ServiceCommand : uint8_t {
   // Internal
   BLE_ECHO_TEST = 0x00,                   // BLE echo test
   GET_DEBUG_LOG = 0x01,                   // 获取调试日志

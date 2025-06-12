@@ -14,6 +14,7 @@ extern "C" {
 #define UART_MESSAGE_MIN_SZ 0x0A
 #define UART_MESSAGE_MAX_SZ (UART_MESSAGE_PAYLOAD_MAX + UART_MESSAGE_MIN_SZ)
 #define UART_MESSAGE_VARIABLE_LENGTH 0xFF
+#define UART_MESSAGE_LENGTH(uart_msg) ((uart_msg).length + UART_MESSAGE_MIN_SZ)
 
 #define BCAST_ADDR 0x0F
 #define FPGA_ADDR 0x0E
@@ -77,6 +78,7 @@ void uart_feed_test();
 #endif
 
 uart_metrics_t *uart_get_metrics();
+
 #ifdef __cplusplus
 }
 #endif

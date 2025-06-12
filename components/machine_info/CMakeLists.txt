@@ -1,9 +1,10 @@
-file(GLOB SRCS_FILES *.cpp)
 idf_component_register(
   SRCS
-  ${SRCS_FILES}
+  "machine_info.cpp"
   INCLUDE_DIRS
   "include"
+  REQUIRES
+  esp_common
   PRIV_REQUIRES
-  controller
-  utils)
+  nvs_data
+  version)

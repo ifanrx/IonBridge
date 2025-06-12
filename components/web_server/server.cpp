@@ -1,6 +1,9 @@
 #include "server.h"
 
 #include <dirent.h>
+#include <stdio.h>
+#include <sys/stat.h>
+#include <sys/unistd.h>
 
 #include <cinttypes>
 #include <cstddef>
@@ -8,22 +11,28 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <string>
 
+#include "cJSON.h"
 #include "esp_app_desc.h"
 #include "esp_check.h"
 #include "esp_chip_info.h"
+#include "esp_core_dump.h"
 #include "esp_err.h"
 #include "esp_heap_caps.h"
 #include "esp_http_server.h"
 #include "esp_idf_version.h"
 #include "esp_log.h"
+#include "esp_partition.h"
 #include "esp_system.h"
 #include "esp_wifi.h"
+#include "esp_wifi_types_generic.h"
 #include "freertos/idf_additions.h"
 #include "freertos/portable.h"
 #include "freertos/projdefs.h"
 #include "http_parser.h"
 #include "ionbridge.h"
+#include "logging.h"
 #include "lwip/inet.h"
 #include "lwip/ip_addr.h"
 #include "lwip/netdb.h"
@@ -33,11 +42,13 @@
 #include "nvs_default.h"
 #include "nvs_namespace.h"
 #include "ping/ping_sock.h"
+#include "port.h"
 #include "port_manager.h"
 #include "portmacro.h"
 #include "power_allocator.h"
 #include "sdkconfig.h"
-#include "storage.h"
+#include "strategy.h"
+#include "wifi.h"
 
 #if defined(CONFIG_DEVICE_HUMMING_BOARD)
 #include "power_config.h"
@@ -53,6 +64,15 @@
 static size_t s_prepopulated_num = 0;
 static heap_task_totals_t s_totals_arr[MAX_TASK_NUM];
 static heap_task_block_t s_block_arr[MAX_BLOCK_NUM];
+#endif
+
+#if defined(CONFIG_ENABLE_ANIMATION_HTTP_TEST_API)
+#include "display_animation.h"
+#include "display_manager.h"
+#endif
+
+#ifdef CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH
+#define COREDUMP_CHUNK_SZ 1024
 #endif
 
 #define WEBSERVER_BUFSZ 512
@@ -79,27 +99,35 @@ esp_err_t http_404_error_handler(httpd_req_t *req, httpd_err_code_t err) {
   httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Not found");
   return ESP_FAIL;
 }
-esp_err_t stop_web_server(void) {
-  if (server_lock == NULL) {
+
+esp_err_t stop_web_server() {
+  if (!server_lock) {
     ESP_LOGW(TAG, "Cannot stop Web server: server_lock is NULL");
     return ESP_FAIL;
   }
 
-  esp_err_t ret = ESP_OK;
-  ESP_RETURN_ON_FALSE(xSemaphoreTake(server_lock, pdMS_TO_TICKS(10)) == pdPASS,
-                      ESP_FAIL, TAG, "Failed to take server lock");
-  if (server != NULL) {
-    ret = httpd_stop(server);
+  if (!server) {
+    ESP_LOGI(TAG, "Cannot stop Web server: server is NULL");
+    return ESP_OK;
   }
+
+  if (xSemaphoreTake(server_lock, pdMS_TO_TICKS(100)) != pdPASS) {
+    ESP_LOGE(TAG, "Failed to take server lock");
+    return ESP_FAIL;
+  }
+
+  esp_err_t ret = httpd_stop(server);
   if (ret == ESP_OK) {
     server = NULL;
-    ESP_LOGI(TAG, "Web server stopped");
+    ESP_LOGI(TAG, "Web server stopped successfully");
   } else {
     ESP_LOGE(TAG, "Failed to stop Web server: %d", ret);
   }
+
   xSemaphoreGive(server_lock);
   return ret;
 }
+
 // Start Web Server
 esp_err_t start_web_server(void) {
   if (server_lock == NULL) {
@@ -107,14 +135,19 @@ esp_err_t start_web_server(void) {
     ESP_RETURN_ON_FALSE(server_lock != NULL, ESP_ERR_NO_MEM, TAG,
                         "Failed to create server lock");
   }
-  ESP_RETURN_ON_ERROR(stop_web_server(), TAG, "Failed to stop Web server");
-  ESP_RETURN_ON_FALSE(xSemaphoreTake(server_lock, pdMS_TO_TICKS(10)) == pdPASS,
+
+  if (server) {
+    ESP_RETURN_ON_ERROR(stop_web_server(), TAG, "Failed to stop Web server");
+  }
+  ESP_RETURN_ON_FALSE(xSemaphoreTake(server_lock, pdMS_TO_TICKS(100)) == pdPASS,
                       ESP_FAIL, TAG, "Failed to take server lock");
 
   httpd_config_t config = HTTPD_DEFAULT_CONFIG();
   config.max_uri_handlers = sizeof(uri_handlers) / sizeof(httpd_uri_t);
+  config.max_open_sockets = 10;
   config.lru_purge_enable = true;
   config.stack_size = 4 * 1024;
+  config.keep_alive_enable = true;
 
   ESP_RETURN_ON_ERROR(httpd_start(&server, &config), TAG,
                       "Unable to start Web server");
@@ -124,7 +157,11 @@ esp_err_t start_web_server(void) {
   }
   httpd_register_err_handler(server, HTTPD_404_NOT_FOUND,
                              http_404_error_handler);
-  ESP_LOGI(TAG, "Web server is running");
+  uint8_t ipv4[4];
+  get_ipv4_addr(ipv4);
+  const std::string &hostname = MachineInfo::GetInstance().GetMDNSHostname();
+  ESP_LOGI(TAG, "Web server is running at http://%s.local (http://%d.%d.%d.%d)",
+           hostname.c_str(), ipv4[0], ipv4[1], ipv4[2], ipv4[3]);
   xSemaphoreGive(server_lock);
   return ESP_OK;
 }
@@ -195,21 +232,10 @@ esp_err_t root_handler(httpd_req_t *req) {
                            "<th>Voltage</th>"
                            "</tr>");
 
+  PortManager &pm = PortManager::GetInstance();
   for (int i = 0; i < NUM_PORTS; i++) {
-    esp_err_t err = PortManager::GetInstance().GetPortData(
-        i, &fc_protocol, &die_temperature, &current, &voltage);
-
-    if (err == ESP_OK) {
-      snprintf(buffer, sizeof(buffer),
-               "<tr>"
-               "<td>%d</td>"
-               "<td>%s</td>"
-               "<td>%u</td>"
-               "<td>%u</td>"
-               "<td>%u</td>"
-               "</tr>",
-               i, "Active", fc_protocol, current, voltage);
-    } else {
+    Port *port = pm.GetPort(i);
+    if (port == nullptr) {
       snprintf(buffer, sizeof(buffer),
                "<tr>"
                "<td>%d</td>"
@@ -217,7 +243,20 @@ esp_err_t root_handler(httpd_req_t *req) {
                "<td colspan='3'>N/A</td>"
                "</tr>",
                i);
+      httpd_resp_sendstr_chunk(req, buffer);
+      continue;
     }
+
+    port->GetData(&fc_protocol, &die_temperature, &current, &voltage);
+    snprintf(buffer, sizeof(buffer),
+             "<tr>"
+             "<td>%d</td>"
+             "<td>%s</td>"
+             "<td>%u</td>"
+             "<td>%u</td>"
+             "<td>%u</td>"
+             "</tr>",
+             i, "Active", fc_protocol, current, voltage);
     httpd_resp_sendstr_chunk(req, buffer);
   }
   httpd_resp_sendstr_chunk(req, "</table>");

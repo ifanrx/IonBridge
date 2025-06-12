@@ -8,9 +8,8 @@
 #include <type_traits>
 
 #include "esp_err.h"
-#include "freertos/FreeRTOS.h"  // IWYU pragma: keep
+#include "esp_timer.h"
 #include "freertos/idf_additions.h"
-#include "freertos/timers.h"
 #include "port_data.h"
 #include "port_manager.h"
 #include "ring_buffer.h"
@@ -30,6 +29,7 @@ enum PowerAllocatorType : uint8_t {
   TEMPORARY_ALLOCATOR = 0x03,
   ULTRA_SLOW_ALLOCATOR = 0x04,
   ULTRA_FAST_ALLOCATOR = 0x05,
+  USBA_ALLOCATOR = 0x06,
 };
 
 enum class PowerAllocatorEventType {
@@ -37,20 +37,11 @@ enum class PowerAllocatorEventType {
   PORT_ATTACHED = (1 << 1),
   PORT_DETACHED = (1 << 2),
   REALLOCATE = (1 << 3),
-
-};
-
-enum class PowerAllocatorMqttEventType {
-  REPORT_STATS = (1 << 0),
 };
 
 struct PowerAllocatorEvent {
   PowerAllocatorEventType event_type;
   uint8_t port_id;  // 0xff indicates all ports
-};
-
-struct PowerAllocatorMqttEvent {
-  PowerAllocatorMqttEventType event_type;
 };
 
 class PowerAllocator {
@@ -60,7 +51,7 @@ class PowerAllocator {
   std::unique_ptr<PowerStrategy> strategy_buffer_;
   uint32_t cooldown_period_secs_;
   uint32_t apply_period_;
-  TimerHandle_t timer_handle_;
+  esp_timer_handle_t timer_handle_;
   uint32_t timer_period_;
   uint32_t charging_at_ = 0;
   PowerAllocatorType type_;
@@ -68,6 +59,7 @@ class PowerAllocator {
   TemperatureMode temperature_mode_ = TemperatureMode::POWER_PRIORITY;
   bool power_allocation_enabled_ = true;
   uint16_t apply_count_ = 0;
+  bool configured_ = false;
 
  public:
   static PowerAllocator &GetInstance();
@@ -78,8 +70,8 @@ class PowerAllocator {
   void Stop();
   void Execute();
   bool IsRunning() const { return taskRunning_; }
-  void PortAttached();
-  void PortDetached();
+  void PortAttached(uint8_t port_id);
+  void PortDetached(uint8_t port_id);
   void Reallocate();
   void HighTempDetect();
   bool OverTempLimitDetect();
@@ -87,16 +79,13 @@ class PowerAllocator {
                          uint8_t min_limit, const char *scenario);
   esp_err_t EnqueueEvent(PowerAllocatorEvent event);
   esp_err_t EnqueueEvent(PowerAllocatorEventType event_type, uint8_t port_id);
-  void EnqueueMqttEvent(PowerAllocatorMqttEvent event);
   void ReportPowerStats();
   uint16_t AddApplyCount();
   void Configure(
       PowerStrategy *strategy, uint32_t cooldown_period_secs,
       uint32_t apply_period, uint32_t timer_period,
       TemperatureMode temperature_mode = TemperatureMode::POWER_PRIORITY);
-
-  // Port control, using port_manager_
-  PortManager &GetPortManager() { return port_manager_; }
+  bool IsConfigured() const { return configured_; }
 
   // Power strategy
   // Generic SetStrategy using variadic templates
@@ -140,20 +129,20 @@ class PowerAllocator {
   TemperatureMode GetTemperatureMode() const { return temperature_mode_; }
 
   void DisablePowerAllocation() { power_allocation_enabled_ = false; }
+  void GetAllocationData(uint16_t *power_budget,
+                         uint16_t *remaining_power) const;
 
   ~PowerAllocator() { Stop(); }
 
  private:
   PowerAllocator();
 
-  static void timer_callback_(TimerHandle_t timer);
+  static void timer_callback_(void *arg);
   static void TaskLoopWrapper(void *pvParameter);
-  static void MqttTaskLoopWrapper(void *pvParameter);
   void TaskLoop();
-  void MqttTaskLoop();
-  bool taskRunning_ = false, mqttTaskRunning_ = false;
-  QueueHandle_t eventQueue_, mqttQueue_;
-  TaskHandle_t taskHandle_, mqttTaskHandle_;
+  bool taskRunning_ = false;
+  QueueHandle_t eventQueue_;
+  TaskHandle_t taskHandle_;
 };
 
 class AllocatorBuilder {
@@ -210,7 +199,7 @@ class AllocatorBuilder {
     return *this;
   }
 
-  PowerAllocator *Build();
+  PowerAllocator &Build();
 
   ~AllocatorBuilder() { delete[] ports_active_; }
 };
