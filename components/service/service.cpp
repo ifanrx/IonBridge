@@ -35,12 +35,7 @@ bool is_service_available_at_high_temp(ServiceCommand service, bool pre_check) {
     case ServiceCommand::SET_DISPLAY_CONFIG:
     case ServiceCommand::SET_SYSLOG_STATE:
     case ServiceCommand::START_OTA:
-      if (pre_check && service == ServiceCommand::SET_DISPLAY_CONFIG) {
-        return true;
-      }
-      ESP_LOGW(TAG, "Service 0x%02x is disabled due to high temperature",
-               service);
-      return false;
+      return true;
     default:
       return true;
   }
