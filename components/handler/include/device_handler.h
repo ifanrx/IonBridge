@@ -34,8 +34,7 @@ esp_err_t SwitchDevice(const std::vector<uint8_t> &request,
 esp_err_t GetDeviceSwitch(const std::vector<uint8_t> &request,
                           std::vector<uint8_t> &response);
 esp_err_t GetDeviceModel(const std::vector<uint8_t> &request,
-❯
-❯ std::vector<uint8_t> &response);
+                         std::vector<uint8_t> &response);
 esp_err_t GetSecureBootDigest(const std::vector<uint8_t> &request,
                               std::vector<uint8_t> &response);
 esp_err_t PingMQTTTelemetry(const std::vector<uint8_t> &request,
