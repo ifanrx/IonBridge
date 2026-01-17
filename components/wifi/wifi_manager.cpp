@@ -10,6 +10,7 @@
 #include <cstring>  // for std::memcpy
 #include <map>
 #include <set>
+#include <string>
 #include <vector>
 
 #include "esp_check.h"
@@ -21,12 +22,14 @@
 #include "ionbridge.h"
 #include "machine_info.h"
 #include "nvs.h"
-#include "utils.h"
 #include "sdkconfig.h"
+#include "utils.h"
 #include "wifi.h"
+#include "wifi_storage.h"
 
 #define WIFI_DEFAULT_SSID CONFIG_IONBRIDGE_WIFI_DEFAULT_SSID
 #define WIFI_DEFAULT_PASSWD CONFIG_IONBRIDGE_WIFI_DEFAULT_PASSWORD
+#define WIFI_FACTORY_SSID_PREFIX CONFIG_IONBRIDGE_WIFI_FACTORY_SSID_PREFIX
 
 // Define constants for scan attempts and delays
 #define MAX_SCAN_ATTEMPTS 5
@@ -72,6 +75,14 @@ esp_err_t WiFiManager::RemoveAll() {
 }
 
 bool WiFiManager::GetWiFi(char* ssid, char* passwd) {
+#ifdef CONFIG_ENABLE_WIFI_LAB_TEST
+  if (IsSSIDScanned(CONFIG_WIFI_LAB_TEST_SSID)) {
+    strlcpy(ssid, CONFIG_WIFI_LAB_TEST_SSID, WIFI_SSID_MAXIMUM);
+    strlcpy(passwd, CONFIG_WIFI_LAB_TEST_PASSWD, WIFI_PASSWD_MAXIMUM);
+    return true;
+  }
+#endif
+
   if (found_count_ > 0 && use_index_ >= found_count_) {
     use_index_ = 0;
     return false;
@@ -118,6 +129,7 @@ esp_err_t WiFiManager::UpdateAvailableWiFi(
   const auto& hash_list = wifi_storage_.GetHash();
   found_count_ = 0;
   found_default_wifi_ = false;
+  found_factory_wifi_ = false;
 
   for (size_t i = 0; i < WIFI_SLOT_COUNT; ++i) {
     uint32_t saved_crc = hash_list[i];
@@ -148,12 +160,13 @@ esp_err_t WiFiManager::UpdateAvailableWiFi(
     }
   }
 
+  const size_t factory_prefix_len = strlen(WIFI_FACTORY_SSID_PREFIX);
   for (const auto& ap : aps) {
-    if (ap.size != 0 && strcmp(reinterpret_cast<const char*>(ap.ssid),
-                               WIFI_DEFAULT_SSID) == 0) {
-      found_default_wifi_ = true;
-      break;
-    }
+    if (ap.size == 0) continue;
+    const char* ssid = reinterpret_cast<const char*>(ap.ssid);
+    found_default_wifi_ |= (strcmp(ssid, WIFI_DEFAULT_SSID) == 0);
+    found_factory_wifi_ |=
+        (strncmp(ssid, WIFI_FACTORY_SSID_PREFIX, factory_prefix_len) == 0);
   }
 
   return ESP_OK;
@@ -209,6 +222,29 @@ bool WiFiManager::HasSSID(const std::string& ssid) {
   return !ssid.empty() && wifi_storage_.HasSSID(ssid.c_str());
 }
 
+bool WiFiManager::IsSSIDScanned(const std::string& ssid) const {
+  if (ssid.empty()) {
+    return false;
+  }
+
+  for (const auto& ap : aps_) {
+    if (ap.size > 0 && ssid.compare(ap.ssid) == 0) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+bool WiFiManager::IsSSIDScanned(const char* ssid) const {
+  if (ssid == nullptr || strlen(ssid) == 0) {
+    return false;
+  }
+
+  std::string ssid_str(ssid);
+  return IsSSIDScanned(ssid_str);
+}
+
 esp_err_t WiFiManager::GetWiFiByIndex(uint8_t index, std::string* ssid,
                                       std::string* passwd,
                                       uint8_t* auth_mode) const {
@@ -251,6 +287,7 @@ void WiFiManager::Reset() {
   use_index_ = 0;
   found_count_ = 0;
   found_default_wifi_ = false;
+  found_factory_wifi_ = false;
   wifi_rssi_ = {};
   association_count_ = 0;
   disassociation_count_ = 0;
@@ -269,17 +306,12 @@ esp_err_t WiFiManager::ScanWiFi() {
   aps_.fill(ssid_info_t{});
 
   // Initialize scan configuration with default parameters
-  wifi_scan_config_t scan_config = {
-      .show_hidden = true,
-      .scan_type = WIFI_SCAN_TYPE_ACTIVE,
-      .scan_time =
-          {
-              .active =
-                  {
-                      .min = 100,
-                      .max = 300,
-                  },
-          },
+  wifi_scan_config_t scan_config = {};
+  scan_config.show_hidden = true;
+  scan_config.scan_type = WIFI_SCAN_TYPE_ACTIVE;
+  scan_config.scan_time.active = {
+      .min = 100,
+      .max = 300,
   };
 
   wifi_scan_default_params_t default_params;
@@ -298,7 +330,7 @@ esp_err_t WiFiManager::ScanWiFi() {
       ESP_LOGW(TAG,
                "Wi-Fi not in correct state for scanning, retrying (%d/%d)...",
                attempt + 1, MAX_SCAN_ATTEMPTS);
-      vTaskDelay(pdMS_TO_TICKS(SCAN_RETRY_DELAY_MS));
+      DELAY_MS(SCAN_RETRY_DELAY_MS);
       continue;
     } else {
       ESP_LOGE(TAG, "Failed to start Wi-Fi scan: %s", esp_err_to_name(ret));
@@ -352,9 +384,11 @@ esp_err_t WiFiManager::GetScanResult() {
     }
     std::string current_country_code(ap->country.cc, 2);
 
-    ESP_LOGI(TAG, "Found AP: SSID: %s, RSSI: %d, BSSID: %s, Channel: %d, Country: %s",
-             ap->ssid, ap->rssi, FORMAT_MAC(ap->bssid), ap->primary,
-             current_country_code.c_str());
+    ESP_LOGI(
+        TAG,
+        "Found AP: SSID: %s, RSSI: %d, BSSID: %s, Channel: %d, Country: %s",
+        ap->ssid, ap->rssi, FORMAT_MAC(ap->bssid), ap->primary,
+        current_country_code.c_str());
     std::string ssid_str((const char*)ap->ssid, ssid_length);
     if (unique_ssids.find(ssid_str) != unique_ssids.end()) {
       continue;  // Skip duplicate SSIDs
@@ -363,7 +397,8 @@ esp_err_t WiFiManager::GetScanResult() {
     unique_ssids.insert(ssid_str);
 
     // Populate the aps array with AP details
-    strlcpy(aps[valid_ap_count].ssid, (const char*)ap->ssid, sizeof(aps[valid_ap_count].ssid));
+    strlcpy(aps[valid_ap_count].ssid, (const char*)ap->ssid,
+            sizeof(aps[valid_ap_count].ssid));
     aps[valid_ap_count].size = ssid_length;
     aps[valid_ap_count].rssi = ap->rssi;
     aps[valid_ap_count].auth_mode = ap->authmode;
@@ -387,7 +422,8 @@ esp_err_t WiFiManager::GetScanResult() {
   }
 
   MachineInfo::GetInstance().SetCountryCode(most_common_country);
-  ESP_LOGI(TAG, "Current country is %s", MachineInfo::GetInstance().GetCountryCode().c_str());
+  ESP_LOGI(TAG, "Current country is %s",
+           MachineInfo::GetInstance().GetCountryCode().c_str());
 
 CLEANUP:
   // Clear the scan results

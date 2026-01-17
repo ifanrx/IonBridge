@@ -1,12 +1,16 @@
 #ifndef PORT_H_
 #define PORT_H_
 
+#include <array>
 #include <cstdint>
 #include <cstring>
+#include <functional>
+#include <string>
 
 #include "data_types.h"
 #include "esp_err.h"
 #include "esp_timer.h"
+#include "internal/sw3566_command_types.h"
 #include "port_data.h"
 #include "port_state.h"
 #include "ring_buffer.h"
@@ -22,6 +26,36 @@
 #define PORT_MIN_CAP SW3566_MIN_CAP
 #endif
 
+#ifdef CONFIG_MCU_MODEL_SW3516
+#include "sw3516_data_types.h"
+
+#define PORT_MAX_POWER SW3516_MAX_POWER
+#define PORT_MIN_POWER SW3516_MIN_POWER
+#define PORT_USB_A_MAX_CAP 60
+#define PORT_MAX_CAP(_) (PORT_MAX_POWER)
+#define PORT_MIN_CAP(_) (PORT_MIN_POWER)
+#endif
+
+#ifdef CONFIG_MCU_MODEL_SW3526
+#include "sw3526_data_types.h"
+
+#define PORT_MAX_POWER SW3526_MAX_POWER
+#define PORT_MIN_POWER SW3526_MIN_POWER
+#define PORT_USB_A_MAX_CAP 60
+#define PORT_MAX_CAP(_) (PORT_MAX_POWER)
+#define PORT_MIN_CAP(_) (PORT_MIN_POWER)
+#endif
+
+#ifdef CONFIG_MCU_MODEL_SW3536
+#include "sw3536_data_types.h"
+
+#define PORT_MAX_POWER SW3536_MAX_POWER
+#define PORT_MIN_POWER SW3536_MIN_POWER
+#define PORT_USB_A_MAX_CAP 60
+#define PORT_MAX_CAP(_) (PORT_MAX_POWER)
+#define PORT_MIN_CAP(_) (PORT_MIN_POWER)
+#endif
+
 #ifdef CONFIG_MCU_MODEL_FAKE_SW3566
 #include "fake_sw3566_data_types.h"
 
@@ -33,41 +67,50 @@
 #endif
 
 #define PORT_HISTORICAL_DATA_SIZE CONFIG_PORT_HISTORICAL_DATA_SIZE
+#define PORT_HISTORICAL_DETAILS_SIZE CONFIG_PORT_HISTORICAL_DETAILS_SIZE
 
 typedef RingBuffer<PortStatsData> HistoricalStatsData;
+typedef RingBuffer<PortDetails> HistoricalDetailsData;
 
 typedef struct __attribute__((packed)) {
-  uint8_t version;  // 目前取 0
+  uint8_t version;
   PowerFeatures features;
 } PortConfig;
 
 class Port {
   uint8_t id_;
   bool attached_ = false;
-  uint8_t power_budget_ = 0xFF, power_budget_watermark_ = 0xFF;
-  uint8_t initial_power_budget_ = 0xFF;
+  uint8_t power_budget_ = 0, power_budget_watermark_ = 0;
+  uint8_t initial_power_budget_ = 0;
   bool initialized_ = false;
   PortPowerData data_;
   PortDetails details_;
   PortState *state_;
   uint32_t attached_at_ = -1;
-  uint32_t collect_count_ = 0;
   ClientPDStatus pd_status_ = {};
-  PowerFeatures features_ = {};
-  bool update_power_features_ = false;
-  uint8_t failure_count_ = 0;
-  const uint8_t max_failure_count_ = 5;
   int64_t updated_at_ = 0;
   int64_t cap_updated_at_ = 0;
 
   PortAverageData average_data_;
   int64_t stats_last_updated_at_ = 0;
   HistoricalStatsData historical_stats_;
+  HistoricalDetailsData historical_details_;
 
   PortStateType last_state_ = PortStateType::UNKNOWN;
-  PortConfig config_;
+  PortConfig config_;                  // Current configuration
+  PortConfig initial_config_;          // First applied config (for reset)
+  bool initial_config_saved_ = false;  // Track if initial config has been saved
+  uint16_t custom_pdo_voltage_mv_ = 0;
+  using StateCallback = std::function<void(Port &port)>;
+
+  std::array<StateCallback, PortStateType::COUNT> state_callbacks_;
 
 #ifdef CONFIG_MCU_MODEL_SW3566
+  struct {
+    uint32_t version;
+    uint32_t flash_timestamp;
+  } bootloader_info_ = {};
+
   SystemFlags system_flags_;
 #endif
 
@@ -80,17 +123,27 @@ class Port {
   };
 #endif
 
+  // Checking state timer
+  esp_timer_handle_t checking_timer_ = nullptr;
+  int64_t checking_at_ = -1;
+  std::string checking_timer_name_;
+
+  // Detaching state timer (debounce for quick reattachments)
+  static constexpr uint32_t DETACH_DEBOUNCE_MS = 500;
+  esp_timer_handle_t detaching_timer_ = nullptr;
+  std::string detaching_timer_name_;
+  static void DetachingTimerCallback(void *arg);
+
  public:
   explicit Port(uint8_t port_id);
   ~Port() = default;
   uint8_t Id() const { return id_; }
   bool Initialize(bool active, uint8_t initial_power_budget);
-  bool Reinitialize();
   bool IsTypeA() const {
 #if defined(CONFIG_MCU_MODEL_SW3566)
     return system_flags_.port_type == PortType::PORT_TYPE_A;
 #elif defined(CONFIG_MCU_MODEL_FAKE_SW3566)
-    return id_ == 0;
+    return FAKE_SW3566_IS_TYPE_A(CONFIG_MCU_MODEL_FAKE_SW3566);
 #else
     return false;
 #endif
@@ -99,12 +152,20 @@ class Port {
   bool IsAdjustable() const;
 
   void SetState(PortStateType type);
+  void SetState(PortState *state);
   void RevertToPreviousState() {
     if (last_state_ != PortStateType::UNKNOWN) {
       SetState(last_state_);
     }
   }
   const PortState &GetState() const { return *state_; }
+  void RegisterStateChangeCallback(PortStateType type, StateCallback cb) {
+    if (type >= 0 && type < PortStateType::COUNT) {
+      state_callbacks_[type] = cb;
+    }
+  }
+  void UnregisterAll() { state_callbacks_.fill(nullptr); }
+  PortStateType GetPreviousStateType() const { return last_state_; }
   const PortPowerData &GetData() const { return data_; }
   void GetData(uint8_t *fc_protocol, uint8_t *temperature, uint16_t *current,
                uint16_t *voltage) const;
@@ -115,10 +176,20 @@ class Port {
     }
   }
   void GetPowerFeatures(PowerFeatures *features) const {
-    *features = features_;
+    *features = config_.features;
   }
   esp_err_t UpdatePowerFeatures(const PowerFeatures &features);
   uint32_t GetChargingDurationSeconds() const;
+
+  esp_err_t SetCustomPdoVoltage(uint16_t voltage_mv);
+  uint16_t GetCustomPdoVoltage() const {
+#ifdef CONFIG_MCU_MODEL_SW3566
+    if (custom_pdo_voltage_mv_ == 0) {
+      return 12000;  // Default to 12V if not set
+    }
+#endif
+    return custom_pdo_voltage_mv_;
+  }
 
   uint8_t MaxPowerCap() const {
     if (IsTypeA()) {
@@ -149,11 +220,11 @@ class Port {
            GetPowerUsage() < CONFIG_PORT_TRICKLE_CHARGING_THRESHOLD;
   }
 
-  bool Actived() const {
+  bool Activated() const {
     return state_ != nullptr && state_->Type() != PortStateType::INACTIVE &&
            state_->Type() != PortStateType::DEAD;
   }
-  bool Attached() const { return Actived() && attached_; }
+  bool Attached() const { return Activated() && attached_; }
   uint32_t AttachedAtMS() const { return attached_at_; }
   uint8_t Temperature() const { return data_.GetTemperature(); }
 
@@ -166,6 +237,10 @@ class Port {
   bool Dead() const {
     return state_ == nullptr || state_->Type() == PortStateType::DEAD;
   }
+  bool Booting() const {
+    return state_ != nullptr && state_->Type() == PortStateType::BOOTING;
+  }
+
   bool Recovering() const {
     return state_ != nullptr && state_->Type() == PortStateType::RECOVERING;
   }
@@ -182,6 +257,7 @@ class Port {
     }
     return state_->Type() == PortStateType::ACTIVE ||
            state_->Type() == PortStateType::ATTACHED ||
+           state_->Type() == PortStateType::DETACHING ||
            state_->Type() == PortStateType::OVER_TEMP_WARNING;
   }
   bool IsClose() const {
@@ -191,11 +267,29 @@ class Port {
     return state_->Type() == PortStateType::INACTIVE;
   }
 
+  void Checking();
   bool IsChecking() const {
     if (state_ == nullptr) {
       return false;
     }
     return state_->Type() == PortStateType::CHECKING;
+  }
+  // Timer management methods
+  void StartCheckingWatchdog();
+  void StopCheckingWatchdog();
+  bool IsCheckingWatchdogActive() const { return checking_timer_ != nullptr; }
+  // Checking state time management
+  int64_t CheckingAt() const { return checking_at_; }
+
+  // Detaching timer management (debounce for quick reattachments)
+  void StartDetachingTimer();
+  void StopDetachingTimer();
+  void CompleteDetach();
+  bool IsDetaching() const {
+    if (state_ == nullptr) {
+      return false;
+    }
+    return state_->Type() == PortStateType::DETACHING;
   }
 
   bool Warning() const {
@@ -231,8 +325,9 @@ class Port {
   bool Attach();
   bool Detach();
 
-  void Shutdown();
+  esp_err_t Shutdown();
   void Reset();
+  esp_err_t ResetState();
   void Update() {
     if (state_) {
       state_->Handle(*this);
@@ -251,6 +346,8 @@ class Port {
       memcpy(details, &details_, sizeof(PortDetails));
     }
   }
+  bool IsConnected() const { return details_.connected; }
+  esp_err_t FetchDetails(PortDetails *details);
   void UpdateData(const PortDetails &details);
   void SetInactiveHistoricalData();
   void SetPDStatus(const ClientPDStatus &status) {
@@ -259,12 +356,18 @@ class Port {
       pd_status_ = status;
     }
   }
-  void SetPowerFeatures(const PowerFeatures &features) { features_ = features; }
+  void SetPowerFeatures(const PowerFeatures &features) {
+    config_.features = features;
+  }
 
   const HistoricalStatsData &GetHistoricalStats() const {
     return historical_stats_;
   }
   size_t GetHistoricalStatsSize() const { return historical_stats_.Size(); }
+  const HistoricalDetailsData &GetHistoricalDetails() const {
+    return historical_details_;
+  }
+  size_t GetHistoricalDetailsSize() const { return historical_details_.Size(); }
 
   esp_err_t EnableLimitedCurrentMode();
   esp_err_t DisableLimitedCurrentMode();
@@ -272,14 +375,30 @@ class Port {
   void ExitPowerLimiting();
   void Reboot();
 
+#ifdef CONFIG_MCU_MODEL_SW3566
+  void GetBootloaderInfo(uint32_t *version, uint32_t *timestamp) const {
+    if (version) {
+      *version = bootloader_info_.version;
+    }
+    if (timestamp) {
+      *timestamp = bootloader_info_.flash_timestamp;
+    }
+  }
+  #endif
+
   esp_err_t SubscribePDPcapStreaming(bool subscribe);
-  esp_err_t UnsubscribePDPcapStreaming();
 
   PowerFeatures MigrateFeatures(const PortConfig &config) const;
   const PortConfig &GetConfig() const { return config_; }
+  void ResetConfig();           // Reset to default values
+  void ResetToInitialConfig();  // Reset to first applied config
   esp_err_t SetConfig(const PortConfig &config);
   esp_err_t ApplyConfig(const PortConfig *config = nullptr);
-  esp_err_t ResetConfig();
+  esp_err_t SetCableCompensation(bool enable, CableCompensation resistance,
+                                 FixedVoltageOffset voltage_offset,
+                                 bool safety = false);
+  void GetCableCompensation(bool &enable, uint8_t &resistance_mohm,
+                            uint8_t &voltage_offset_level) const;
   esp_err_t SetPortType(PortType type);
   PortType GetPortType() const {
 #if defined(CONFIG_MCU_MODEL_SW3566)
@@ -292,7 +411,8 @@ class Port {
   }
 
  private:
-  void SetState(PortState *state);
+  static void CheckingWatchdogCallback(void *arg);
+  PortDetails ValidateAndSanitizeDetails(const PortDetails &details);
 };
 
 #endif

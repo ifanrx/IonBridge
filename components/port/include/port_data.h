@@ -4,8 +4,6 @@
 #include <cstddef>
 #include <cstdint>
 
-#include "esp_log.h"
-
 class PortPowerData {
  protected:
   uint8_t fc_protocol;
@@ -99,19 +97,13 @@ class PortAverageData : public PortPowerData {
 };
 
 class PortStatsData {
-  // (value / 8) is actual Volts value -> accurate up to 0.125 V
-  uint8_t voltage;
-  // (value / 32) is actual Amps value -> accurate up to 0.03125 A
-  uint8_t amperage;
-  uint8_t temperature;
-  uint8_t vin_value;
+  uint16_t voltage;
+  uint16_t amperage;
 
  public:
   PortStatsData(const PortAverageData &data) {
-    voltage = ScaleVoltage(data.GetVoltage());
-    amperage = ScaleAmperage(data.GetCurrent());
-    temperature = data.GetTemperature();
-    vin_value = ScaleVoltage(data.GetVinValue());
+    voltage = data.GetVoltage();
+    amperage = data.GetCurrent();
   }
 
   static uint8_t ScaleVoltage(uint16_t voltage) {
@@ -121,10 +113,8 @@ class PortStatsData {
     return (uint8_t)(amperage * 32 / 1e3);
   }
 
-  uint8_t GetVoltage() const { return voltage; }
-  uint8_t GetAmperage() const { return amperage; }
-  uint8_t GetTemperature() const { return temperature; }
-  uint8_t GetVinValue() const { return vin_value; }
+  uint16_t GetVoltage() const { return voltage; }
+  uint16_t GetAmperage() const { return amperage; }
 };
 
 #endif  // PORT_DATA_H

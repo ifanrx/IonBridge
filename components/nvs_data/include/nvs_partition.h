@@ -1,30 +1,35 @@
 #ifndef NVS_PARTITION_H_
 #define NVS_PARTITION_H_
 
-#include <memory>
 #include <string>
 
 #include "esp_err.h"
-#include "nvs.h"
-#include "nvs_namespace.h"
 
-class NVSPartition {
- public:
-  static esp_err_t Init();
-  static esp_err_t InitUserData();
+namespace nvs_wrapper {
+esp_err_t Initialize();
 
-  NVSPartition(const std::string& name);
+namespace partition {
+constexpr const char* PROTECTED_DATA_NVS_PARTITION = "protected_data";
+constexpr const char* USER_DATA_NVS_PARTITION = "nvs";
 
-  std::unique_ptr<NVSNamespace> OpenNamespace(const std::string& ns,
-                                              nvs_open_mode open_mode);
+inline bool ValidateName(const std::string& name) {
+  return name == PROTECTED_DATA_NVS_PARTITION ||
+         name == USER_DATA_NVS_PARTITION;
+}
+inline bool ValidateName(const char* name) {
+  return ValidateName(std::string(name));
+}
 
-  esp_err_t GetErrorCode() const { return error_code_; }
-  esp_err_t EraseAll();
-
- private:
-  static bool initialized_;
-  std::string name_;
-  esp_err_t error_code_ = ESP_OK;
-};
+esp_err_t Initialize(const std::string& name, bool erase_at_failure = false);
+inline esp_err_t InitializeProtectedData() {
+  return Initialize(PROTECTED_DATA_NVS_PARTITION, false);
+}
+inline esp_err_t InitializeUserData() {
+  return Initialize(USER_DATA_NVS_PARTITION, true);
+}
+esp_err_t ReinitalizeUserData();
+esp_err_t EraseUserData();
+};  // namespace partition
+};  // namespace nvs_wrapper
 
 #endif

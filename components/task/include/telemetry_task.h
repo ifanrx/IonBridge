@@ -6,8 +6,9 @@
 
 #include "esp_err.h"
 #include "freertos/idf_additions.h"
-#include "mqtt_message.h"
 #include "sdkconfig.h"
+#include "service.h"
+#include "telemetry.pb.h"
 #include "version.h"
 
 #ifdef CONFIG_MCU_MODEL_SW3566
@@ -22,10 +23,15 @@ class TelemetryTask {
   bool debug_ = false, started_ = false;
   TaskHandle_t task_handle_;
   QueueHandle_t mqtt_msg_queue_;
+  uint8_t nonce_[8];
 
   // Buffer pool configuration
   using BufferId = uint8_t;
   using BufferType = uint8_t *;
+  struct QueueItem {
+    BufferId id;
+    uint8_t command;
+  };
 
   static constexpr uint32_t kMutexTimeoutMs = 50;
   static constexpr BufferId INVALID_BUFFER_ID = 0xFF;
@@ -42,13 +48,27 @@ class TelemetryTask {
 
   static void TaskLoopWrapper(void *pvParameters);
   void TaskLoop();
-  void ReportMQTTMessage(const MQTTMessage &msg);
+  void ReportMQTTMessage(const TelemetryCommand command,
+                         const pb_TelemetryData &data);
 
   void InitBufferPool();
   BufferId AcquireBuffer(size_t buffer_size);
   void ReleaseBuffer(BufferId buffer_id);
   BufferType GetBuffer(BufferId buffer_id);
   size_t GetBufferSize(BufferId buffer_id);
+
+  void ReportDeviceBootInfo();
+  void ReportUpgradeResult();
+  void ReportUpgradeData(const Version &esp32_version,
+                         const Version &mcu_version,
+                         const Version &fpga_version, pb_UpgradeStatus status,
+                         pb_UpgradeFailureReason reason, esp_err_t esp_err);
+#ifdef CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH
+  void ReportCoredumpInfo();
+#endif
+
+  void GenerateNonce();
+  bool ValidateNonce(const char *input_nonce);
 
  public:
   // Delete copy constructor and assignment operator
@@ -65,24 +85,17 @@ class TelemetryTask {
   bool IsDebug() { return debug_; }
   void SetDebug(bool debug) { debug_ = debug; }
 
-  void ReportDeviceBootInfo();
-  void ReportMqttConnectionTime();
+  void ReportMQTTConnectionTime();
 
-  void ReportUpgradeResult();
-  void ReportAllUpgradeInfo(bool confirmed, bool confirmed_timeout = false);
   void ReportUpgradeStart();
   void ReportUpgradeError(esp_err_t err);
 
-  void ReportESP32UpgradeError(const Version &version, esp_err_t err);
-  void ReportESP32UpgradeInfo(const Version &version, UpgradeStatus status,
-                              UpgradeFailureReason reason, esp_err_t esp_err);
-
-#ifdef CONFIG_MCU_MODEL_SW3566
-  void ReportPDPCapData(uint8_t port, PcapEntry &pcap_entry);
+#if defined(CONFIG_MCU_MODEL_SW3566) && defined(CONFIG_ENABLE_PROGRAMMER)
+  void ReportProgrammerStart();
+  void ReportProgrammerFinish();
 #endif
 
   esp_err_t ReportPingInfo();
-  void ReportOTAConfirmInfo();
 
   void RequestLicense();
 
@@ -100,6 +113,11 @@ class TelemetryTask {
                                  uint16_t remaining_power);
 
   void ReportOutOfMemory(uint32_t caps) const;
+
+  void ReportTaskExecutionResult(uint32_t id,
+                                 pb_TaskExecutionStatus status) const;
+
+  void ReportACDCSelfTestInfo();
 };
 
 #endif

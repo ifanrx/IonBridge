@@ -1,0 +1,96 @@
+#include "nvs_key.h"
+
+namespace nvs_keys {
+
+// Device related keys
+const Key DEVICE_SERIAL_NUMBER{"serial_number"};
+const Key DEVICE_PASSWORD{"password"};
+const Key DEVICE_NAME{"name"};
+const Key DEVICE_HARDWARE_REV{"hardware_rev"};
+const Key DEVICE_PRODUCT_FAMILY{"product_family"};
+const Key DEVICE_PRODUCT_COLOR{"color"};
+const Key DEVICE_AES_KEY{"aes_key"};
+const Key DEVICE_MODEL{"model"};
+const Key DEVICE_WIFI_MAC{"wifi_mac"};
+const Key DEVICE_BLUETOOTH_MAC{"bluetooth_mac"};
+const Key DEVICE_TOKEN{"DEVICE_TOKEN"};
+const Key DEVICE_MODEL_SET_FLAG{"model_set_flag"};
+const Key DEVICE_DATA_MATRIX_FLAG{"dm_flag"};
+const Key DEVICE_SWITCH_APP{"switch_app"};
+
+// Certificate & MQTT keys
+const Key CA_CERT{"ca_cert"};
+const Key MQTT_CA_CERT{"mqtt_ca"};
+const Key MQTT_CERT{"mqtt_cert"};
+const Key MQTT_KEY{"mqtt_key"};
+const Key MQTT_BROKER{"mqtt_broker"};
+const Key MQTT_CUSTOM_BROKER{"mqtt_c_broker"};
+
+// System related keys
+const Key SYSTEM_TIME{"system_time"};
+const Key SYSLOG_REPORT_STATE{"report_state"};
+#ifdef CONFIG_ENABLE_RFTEST
+const Key TEST_MODE_A{"test_mode_a"};
+#endif
+
+// FPGA related keys
+const Key FPGA_CONFIGS{"configs"};
+const Key FPGA_POWER_CONTROL{"power_control"};
+
+// License related keys
+const Key LICENSE_FEATURES{"l_features"};
+const Key LICENSE_EXPIRE_TIME{"l_exp_time"};
+
+// Display related keys
+const Key DISPLAY_MODE{"mode"};
+const Key DISPLAY_INTENSITY{"intensity"};
+const Key DISPLAY_FLIP{"flip"};
+const Key DISPLAY_ROTATION{"rotation"};
+const Key IDLE_ANIMATION{"idle_anim"};
+
+// Power & port related keys
+const Key POWER_CONFIG{"power_config"};
+const Key POWER_ALLOCATOR_ENABLED{"alloc_enabled"};
+const Key POWER_PORT_PRIORITY{"port_priority"};
+const std::array<Key, PORT_CFG_SIZE> PORT_CFG_KEYS = {{
+    PORT_CFG_KEY(0),
+    PORT_CFG_KEY(1),
+    PORT_CFG_KEY(2),
+    PORT_CFG_KEY(3),
+    PORT_CFG_KEY(4),
+    PORT_CFG_KEY(5),
+    PORT_CFG_KEY(6),
+    PORT_CFG_KEY(7),
+}};
+
+// Wi-Fi related keys
+const Key WIFI_HASH{"hash"};
+const std::array<Key, WIFI_CREDENTIALS_SIZE> WIFI_CREDENTIAL_KEYS = {{
+    WIFI_CREDENTIAL_KEY(01), WIFI_CREDENTIAL_KEY(02), WIFI_CREDENTIAL_KEY(03),
+    WIFI_CREDENTIAL_KEY(04), WIFI_CREDENTIAL_KEY(05), WIFI_CREDENTIAL_KEY(06),
+    WIFI_CREDENTIAL_KEY(07), WIFI_CREDENTIAL_KEY(08), WIFI_CREDENTIAL_KEY(09),
+    WIFI_CREDENTIAL_KEY(10), WIFI_CREDENTIAL_KEY(11), WIFI_CREDENTIAL_KEY(12),
+    WIFI_CREDENTIAL_KEY(13), WIFI_CREDENTIAL_KEY(14), WIFI_CREDENTIAL_KEY(15),
+    WIFI_CREDENTIAL_KEY(16), WIFI_CREDENTIAL_KEY(17), WIFI_CREDENTIAL_KEY(18),
+    WIFI_CREDENTIAL_KEY(19), WIFI_CREDENTIAL_KEY(20), WIFI_CREDENTIAL_KEY(21),
+    WIFI_CREDENTIAL_KEY(22), WIFI_CREDENTIAL_KEY(23), WIFI_CREDENTIAL_KEY(24),
+    WIFI_CREDENTIAL_KEY(25), WIFI_CREDENTIAL_KEY(26), WIFI_CREDENTIAL_KEY(27),
+    WIFI_CREDENTIAL_KEY(28), WIFI_CREDENTIAL_KEY(29), WIFI_CREDENTIAL_KEY(30),
+    WIFI_CREDENTIAL_KEY(31), WIFI_CREDENTIAL_KEY(32), WIFI_CREDENTIAL_KEY(33),
+    WIFI_CREDENTIAL_KEY(34), WIFI_CREDENTIAL_KEY(35), WIFI_CREDENTIAL_KEY(36),
+    WIFI_CREDENTIAL_KEY(37), WIFI_CREDENTIAL_KEY(38), WIFI_CREDENTIAL_KEY(39),
+    WIFI_CREDENTIAL_KEY(40), WIFI_CREDENTIAL_KEY(41), WIFI_CREDENTIAL_KEY(42),
+    WIFI_CREDENTIAL_KEY(43), WIFI_CREDENTIAL_KEY(44), WIFI_CREDENTIAL_KEY(45),
+    WIFI_CREDENTIAL_KEY(46), WIFI_CREDENTIAL_KEY(47), WIFI_CREDENTIAL_KEY(48),
+    WIFI_CREDENTIAL_KEY(49), WIFI_CREDENTIAL_KEY(50), WIFI_CREDENTIAL_KEY(51),
+    WIFI_CREDENTIAL_KEY(52), WIFI_CREDENTIAL_KEY(53), WIFI_CREDENTIAL_KEY(54),
+    WIFI_CREDENTIAL_KEY(55), WIFI_CREDENTIAL_KEY(56), WIFI_CREDENTIAL_KEY(57),
+    WIFI_CREDENTIAL_KEY(58), WIFI_CREDENTIAL_KEY(59), WIFI_CREDENTIAL_KEY(60),
+    WIFI_CREDENTIAL_KEY(61), WIFI_CREDENTIAL_KEY(62), WIFI_CREDENTIAL_KEY(63),
+    WIFI_CREDENTIAL_KEY(64),
+}};
+
+// OTA related keys
+const Key OTA_CONFIRM_RESULT{"confirm_res"};
+
+};  // namespace nvs_keys

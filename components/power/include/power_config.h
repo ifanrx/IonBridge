@@ -40,4 +40,8 @@ esp_err_t get_power_config(PowerConfig *config);
 
 void set_power_temperature_thresholds(uint8_t high_temp_threshold,
                                       uint8_t low_temp_threshold);
+
+// NVS cleanup function for cloud migration
+esp_err_t cleanup_power_config_nvs();
+
 #endif /* POWER_CONFIG_H_ */

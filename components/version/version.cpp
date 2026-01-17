@@ -50,7 +50,7 @@ bool Version::operator>(const Version &other) const {
 
 bool Version::operator<(const Version &other) const { return other > *this; }
 
-std::string Version::toString() const {
+std::string Version::ToString() const {
   char buffer[16];
   snprintf(buffer, 16, FORMAT, major, minor, revision);
   return std::string(buffer);

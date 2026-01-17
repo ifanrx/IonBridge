@@ -2,6 +2,7 @@
 #include <string.h>
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 
@@ -12,6 +13,7 @@
 #include "esp_log.h"
 #include "esp_random.h"
 #include "esp_timer.h"
+#include "internal/sw3566_command_types.h"
 #include "ionbridge.h"
 #include "rpc.h"
 #include "sdkconfig.h"
@@ -19,8 +21,21 @@
 #include "sw3566_data_types.h"
 #include "uart.h"
 #include "utils.h"
+#include "version.h"
 
 static const char *TAG = "SW3566";
+
+// OTA stage mapping for SW3566 MCU updates (up to 8 MCUs)
+static constexpr OTAStage kUpdateStages[] = {
+    OTAStage::UPDATE_ERASE,   // MCU 0
+    OTAStage::UPDATE_STAGE1,  // MCU 1
+    OTAStage::UPDATE_STAGE2,  // MCU 2
+    OTAStage::UPDATE_STAGE3,  // MCU 3
+    OTAStage::UPDATE_STAGE4,  // MCU 4
+    OTAStage::UPDATE_STAGE4,  // MCU 5 (reuse STAGE4)
+    OTAStage::UPDATE_STAGE4,  // MCU 6 (reuse STAGE4)
+    OTAStage::UPDATE_STAGE4,  // MCU 7 (reuse STAGE4)
+};
 
 #define HASH_SIZE 5
 #define PROGRAM_PAGE_SIZE 0x80
@@ -33,9 +48,11 @@ typedef enum : uint8_t {
   AT_USERAPP,
   BOOT_TO_USERAPP,
   OPERATIONAL,
-} SW3566BootStage;
+  } SW3566BootStage;
 
 uint8_t generate_nonce();
+
+static bool check_firmware_hash_of_file() { return true; }
 
 esp_err_t rpc::mcu::send_command(uint8_t mcu, uint16_t command,
                                  const uint8_t *request, uint8_t request_size,
@@ -110,12 +127,26 @@ esp_err_t rpc::mcu::boot(uint8_t mcu) {
   return ESP_OK;
 }
 
-esp_err_t rpc::mcu::bringup(uint8_t mcu, bool skip_upgrade) {
+esp_err_t rpc::mcu::reset_system(uint8_t mcu, bool wait_for_response) {
+  return ESP_OK;
+}
+
+esp_err_t rpc::mcu::bringup(uint8_t mcu, bool skip_upgrade,
+                            const Version *programmer_version,
+                            bool *upgraded_out) {
   ESP_LOGI(TAG, "Bringing up SW3566[%d]", mcu);
   KeepAliveStatus keep_alive_status;
   esp_err_t __attribute__((unused)) err;
-  bool upgraded = false;
+  bool programmer_upgraded = false;
+  bool upgraded = false;  // No firmware upgrade in public version
   SW3566BootStage stage = SW3566BootStage::AT_BOOTLOADER;
+
+  if (programmer_version != nullptr) {
+    ESP_LOGW(
+        TAG,
+        "Bringing up SW3566[%d] with programmer version %s, skip_upgrade=%d",
+        mcu, programmer_version->ToString().c_str(), skip_upgrade);
+  }
 
   while (true) {
     switch (stage) {
@@ -132,6 +163,13 @@ esp_err_t rpc::mcu::bringup(uint8_t mcu, bool skip_upgrade) {
 
       case SW3566BootStage::AT_USERAPP:
         ESP_LOGI(TAG, "SW3566[%d] USERAPP", mcu);
+        if (programmer_upgraded) {
+          ESP_LOGI(TAG,
+                   "SW3566[%d]: Programmer upgraded, skipping user app check",
+                   mcu);
+          stage = SW3566BootStage::OPERATIONAL;
+          break;
+        }
         ESP_RETURN_ON_ERROR(keep_alive(mcu, &keep_alive_status), TAG,
                             "keep_alive failed for MCU: %d", mcu);
         if (keep_alive_status != KeepAliveStatus::USER_APPLICATION_ALIVE) {
@@ -152,8 +190,9 @@ esp_err_t rpc::mcu::bringup(uint8_t mcu, bool skip_upgrade) {
 
       case SW3566BootStage::OPERATIONAL:
         ESP_LOGI(TAG, "SW3566[%d] OPERATIONAL", mcu);
-        DisplayManager::GetInstance().SetAnimation(
-            AnimationType::IDLE_ANIMATION, true);
+        if (upgraded_out != nullptr) {
+          *upgraded_out = upgraded;
+        }
         return ESP_OK;
 
       default:
@@ -163,25 +202,51 @@ esp_err_t rpc::mcu::bringup(uint8_t mcu, bool skip_upgrade) {
   }
 }
 
-esp_err_t rpc::mcu::boot_all(bool *booted, uint8_t count, bool skip_upgrade) {
+esp_err_t rpc::mcu::boot_all(bool *booted, uint8_t count, bool skip_upgrade,
+                             bool *any_upgraded) {
   if (booted == NULL) {
     return ESP_ERR_INVALID_ARG;
   }
+
+  // Pre-check firmware file validity - abort early if invalid
+  if (!skip_upgrade && !check_firmware_hash_of_file()) {
+    ESP_LOGE(TAG, "Firmware file verification failed");
+    return ESP_ERR_NOT_FOUND;
+  }
+
+  bool upgraded_flag = false;
 
   for (uint8_t i = 0; i < count; i++) {
     if (!booted[i]) {
       continue;
     }
-    esp_err_t err = bringup(i, skip_upgrade);
+    bool chip_upgraded = false;
+    esp_err_t err = bringup(i, skip_upgrade, nullptr, &chip_upgraded);
     booted[i] = (err == ESP_OK);
     if (!booted[i]) {
       ESP_ERROR_COMPLAIN(booted[i], "Failed to boot SW3566 %d", i);
     }
+    if (chip_upgraded) {
+      upgraded_flag = true;
+    }
   }
+
+  if (any_upgraded != nullptr) {
+    *any_upgraded = upgraded_flag;
+  }
+
+  // Cleanup temp firmware file (always, even if no upgrades performed)
+  Storage::CleanupUpgradeFirmware();
+
+  // Transition to idle animation only if actual upgrades were performed
+  if (upgraded_flag) {
+    DisplayManager::GetInstance().SetNextAnimation(AnimationType::IDLE, true);
+  }
+
   return ESP_OK;
 }
 
-esp_err_t rpc::mcu::set_subscription(uint8_t mcu, Subscriptions &subs) {
+esp_err_t rpc::mcu::set_subscription(uint8_t mcu, const Subscriptions &subs) {
   SetSubscriptionsRequest req{
       .nonce = generate_nonce(),
       .subscriptions = subs,
@@ -288,6 +353,21 @@ esp_err_t rpc::mcu::get_power_features(uint8_t mcu, PowerFeatures *features) {
     memcpy(features, &res.features, sizeof(PowerFeatures));
   }
 
+  return ESP_OK;
+}
+
+esp_err_t rpc::mcu::set_custom_pdo_voltage(uint8_t mcu, uint16_t voltage_mv) {
+  SetCustomPdoVoltageRequest req = {.nonce = generate_nonce(),
+                                    .voltage_mv = voltage_mv};
+  SetCustomPdoVoltageResponse res;
+  uint8_t res_size = sizeof(res);
+  SEND_UART_MSG(mcu, SW3566Command::SET_CUSTOM_PDO_VOLTAGE,
+                (const uint8_t *)&req, sizeof(req), (uint8_t *)&res, &res_size,
+                "set_custom_pdo_voltage");
+  if (res.status != GenericStatus::OK) {
+    ESP_LOGE(TAG, "SW3566 %d set_custom_pdo_voltage: %d", mcu, res.status);
+    return ESP_ERR_INVALID_RESPONSE;
+  }
   return ESP_OK;
 }
 

@@ -2,56 +2,58 @@
 
 #include <sys/param.h>
 
-#include <cstring>
-#include <vector>
-
+#include "admin.pb.h"
 #include "ble.h"
+#include "command.pb.h"
 #include "controller.h"
+#include "data_types.pb.h"
 #include "esp_check.h"
 #include "esp_err.h"
 #include "esp_log.h"
 #include "esp_wifi.h"
 #include "sdkconfig.h"
 #include "upgrade.h"
+#include "version.h"
 #include "wifi.h"
 
 static const char *TAG = "OTAHandler";
 
-esp_err_t OTAHandler::StartOTA(const std::vector<uint8_t> &request,
-                               std::vector<uint8_t> &response) {
-  firmware_version new_version;
+esp_err_t OTAHandler::FromMQTT::StartOTA(const pb_CommandRequest &request,
+                                         pb_CommandResponse &response) {
+  response.which_payload = pb_CommandResponse_start_ota_tag;
 
-  // Log the incoming request data
-  ESP_LOG_BUFFER_HEX_LEVEL(TAG, request.data(), request.size(), ESP_LOG_DEBUG);
-  // Check if the payload size matches the expected size for a new version
-  ESP_RETURN_ON_FALSE(request.size() == sizeof(new_version),
-                      ESP_ERR_INVALID_ARG, TAG,
-                      "Invalid payload size: want %d, got %d",
-                      static_cast<int>(sizeof(new_version)), request.size());
+  const pb_StartOTAReq &ota_request = request.payload.start_ota;
+  const pb_Version &esp32_version = ota_request.esp32_version;
+  FirmwareVersions new_version;
 
-  // Copy request data into the new_version structure
-  memcpy(&new_version, request.data(), sizeof(new_version));
+#if defined(CONFIG_MCU_MODEL_SW3566) || defined(CONFIG_MCU_MODEL_FAKE_SW3566)
+  const pb_Version &sw3566_version = ota_request.sw3566_version,
+                   &fpga_version = ota_request.fpga_version;
+  new_version.sw3566 =
+      Version(sw3566_version.major, sw3566_version.minor, sw3566_version.patch);
+  new_version.fpga =
+      Version(fpga_version.major, fpga_version.minor, fpga_version.patch);
+#endif
+  new_version.esp32 =
+      Version(esp32_version.major, esp32_version.minor, esp32_version.patch);
+  new_version.force = request.payload.start_ota.force;
 
 #ifdef CONFIG_MCU_MODEL_SW3566
-  ESP_LOGI(
-      TAG,
-      "New version - SW3566 %d.%d.%d, FPGA %d.%d.%d, ESP32 %d.%d.%d, force: %d",
-      new_version.sw3566_version[0], new_version.sw3566_version[1],
-      new_version.sw3566_version[2], new_version.fpga_version[0],
-      new_version.fpga_version[1], new_version.fpga_version[2],
+  ESP_LOGI(TAG, "New version - SW3566 %s, FPGA %s, ESP32 %s, force: %d",
+           new_version.sw3566.ToString().c_str(),
+           new_version.fpga.ToString().c_str(),
 #else
-  ESP_LOGI(TAG, "New version - ESP32 %d.%d.%d, force: %d",
+  ESP_LOGI(TAG, "New version - ESP32 %s, force: %d",
 #endif
-      new_version.esp32_version[0], new_version.esp32_version[1],
-      new_version.esp32_version[2], new_version.force);
+           new_version.esp32.ToString().c_str(), new_version.force);
 
   // Ensure WiFi is connected before proceeding with OTA
   ESP_RETURN_ON_FALSE(wifi_is_connected(), ESP_ERR_WIFI_NOT_CONNECT, TAG,
                       "WiFi is not connected");
 
   // De-initialize BLE stack to release resources
-  ble_deinit();
-  esp_err_t err = start_upgrade_task(&new_version);
+  ble_adv_stop();
+  esp_err_t err = UpgradeManager::GetInstance().StartUpgrade(new_version);
   DeviceController &controller = DeviceController::GetInstance();
   if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
     ESP_LOGE(TAG, "Failed to start upgrade task, rebooting in 2 seconds");
@@ -63,3 +65,4 @@ esp_err_t OTAHandler::StartOTA(const std::vector<uint8_t> &request,
   controller.set_upgrading(true);
   return ESP_OK;
 }
+

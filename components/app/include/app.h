@@ -4,29 +4,35 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
-#include <string>
 #include <unordered_map>
 #include <vector>
 
+#include "admin.pb.h"
+#include "command.pb.h"
 #include "esp_err.h"
 #include "service.h"
 
-enum ServiceScope {
-  SERVICE_SCOPE_BLE,
-  SERVICE_SCOPE_MQTT,
-  SERVICE_SCOPE_ALL,
-};
-
 using SrvFunc = std::function<esp_err_t(const std::vector<uint8_t> &,
                                         std::vector<uint8_t> &)>;
+using EnduserSrv =
+    std::function<esp_err_t(const pb_CommandRequest &, pb_CommandResponse &)>;
+using AdminSrv = std::function<esp_err_t(const pb_AdminCommandRequest &,
+                                         pb_AdminCommandResponse &)>;
 
 class App {
  private:
   std::unordered_map<ServiceCommand, SrvFunc> m_ble_services;
-  std::unordered_map<ServiceCommand, SrvFunc> m_mqtt_services;
+  std::unordered_map<ServiceCommand, EnduserSrv> m_mqtt_services;
+  std::unordered_map<AdminCommand, AdminSrv> m_mqtt_admin_services;
 
   App() = default;
   ~App() = default;
+
+  template <typename CmdEnumT, typename PbRequestT, typename PbResponseT,
+            typename HandlerMapT>
+  void ExecMQTTSrvGeneric(CmdEnumT command, const PbRequestT &request,
+                          PbResponseT &response,
+                          const HandlerMapT &handler_map);
 
  public:
   App(const App &) = delete;
@@ -37,19 +43,35 @@ class App {
     return instance;
   }
 
-  void String(const std::string &str, std::vector<uint8_t> &response);
+  bool HasBLESrv(uint8_t service);
+  bool HasMQTTSrv(uint8_t service);
 
-  bool HasSrv(uint8_t service, ServiceScope scope);
+  void SrvBLE(ServiceCommand command, SrvFunc func) {
+    m_ble_services[command] = std::move(func);
+  }
 
-  void Srv(ServiceCommand command, SrvFunc func, ServiceScope scope);
+  void SrvMQTT(ServiceCommand command, EnduserSrv func) {
+    m_mqtt_services[command] = std::move(func);
+  }
+  void SrvMQTT(AdminCommand command, AdminSrv func) {
+    m_mqtt_admin_services[command] = std::move(func);
+  }
 
-  ResponseStatus PreCheckSrv(ServiceCommand command);
+  pb_CommandStatus PreCheckSrv(ServiceCommand command);
 
-  size_t ExecSrvFromBle(uint8_t service, uint8_t *payload, size_t payloadSize,
-                        uint8_t *response, size_t responseSize);
+  size_t ExecBLESrv(uint8_t service, uint8_t *payload, size_t payloadSize,
+                    uint8_t *response, size_t responseSize);
 
-  void ExecSrvFromMQTT(uint8_t service, const std::vector<uint8_t> &request,
-                       std::vector<uint8_t> &response);
+  void ExecMQTTSrv(ServiceCommand command, const pb_CommandRequest &request,
+                   pb_CommandResponse &response) {
+    ExecMQTTSrvGeneric(command, request, response, m_mqtt_services);
+  }
+  void ExecMQTTSrv(AdminCommand command, const pb_AdminCommandRequest &request,
+                   pb_AdminCommandResponse &response) {
+    ExecMQTTSrvGeneric(command, request, response, m_mqtt_admin_services);
+  }
 };
+
+#include "app.tpp"
 
 #endif

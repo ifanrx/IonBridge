@@ -14,3 +14,76 @@ config TEMP_FOLDER_PATH
         Path to the temporary folder that will be used by the application.
 
 endmenu
+
+menu "Firmware Sizes"
+    config SW3566_FIRMWARE_SIZE
+        int "SW3566 firmware uncompressed size (bytes)"
+        default 0
+        help
+            Uncompressed size of SW3566 firmware. Set automatically by update_version.
+            Used for decompression buffer allocation.
+
+    config FPGA_FIRMWARE_SIZE
+        int "FPGA firmware uncompressed size (bytes)"
+        default 0
+        help
+            Uncompressed size of FPGA firmware. Set automatically by update_version.
+            Used for decompression buffer allocation.
+endmenu
+
+menu "Storage Compression"
+    choice STORAGE_COMPRESSION_TYPE
+        prompt "Firmware compression type"
+        default STORAGE_COMPRESSION_GZIP
+        help
+            Select the compression algorithm for firmware files (FPGA bitstream, SW3566).
+            Compressed files (.gz or .xz) are automatically detected and decompressed
+            at runtime by the storage layer.
+
+        config STORAGE_COMPRESSION_NONE
+            bool "No compression"
+            help
+                Store firmware as uncompressed .bin files.
+
+        config STORAGE_COMPRESSION_GZIP
+            bool "GZIP compression"
+            help
+                Use gzip compression (.gz files).
+                Typical compression: ~51% size reduction.
+                Memory: 32KB sliding window.
+                Speed: Fast decompression.
+
+        config STORAGE_COMPRESSION_XZ
+            bool "XZ/LZMA compression"
+            help
+                Use XZ/LZMA compression (.xz files).
+                Typical compression: ~62% size reduction.
+                Memory: Configurable dictionary (4-64KB).
+                Speed: Slower than gzip, better compression ratio.
+    endchoice
+
+    config STORAGE_DECOMPRESSION_CHUNK_SIZE
+        int "Decompression chunk/buffer size (bytes)"
+        default 16384
+        range 1024 32768
+        help
+            Buffer size for streaming decompression. Larger buffers reduce
+            decoder iterations and improve performance. Two buffers of this
+            size are allocated during decompression (input + output).
+
+    config STORAGE_COMPRESSION_XZ_DICT_SIZE
+        int "XZ dictionary size (KB)"
+        depends on STORAGE_COMPRESSION_XZ
+        default 4
+        range 4 64
+        help
+            LZMA dictionary size for XZ decompression. Must match or exceed
+            the dictionary size used during compression. Larger dictionaries
+            provide better compression but use more RAM.
+
+            Common values:
+            - 4KB: Minimal memory, lower compression
+            - 8KB: Balanced (recommended)
+            - 16KB: Better compression
+            - 32KB+: Maximum compression, high memory use
+endmenu

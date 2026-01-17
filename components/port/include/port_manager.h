@@ -1,6 +1,8 @@
 #ifndef PORT_MANAGER_H
 #define PORT_MANAGER_H
 
+#include <sys/types.h>
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -18,21 +20,32 @@
 #include "uart.h"
 #endif
 
+#ifdef CONFIG_INTERFACE_TYPE_I2C
+#include "i2c.h"
+#endif
+
 using PortPredicate = std::function<bool(const Port&)>;
 using ForEachCallback = std::function<void(Port&)>;
 using ForEachConstCallback = std::function<void(const Port&)>;
+
+struct VoltageRequirements {
+  int16_t max_output_voltage_mv;  // -1: no ports, 0: negotiating, >0: actual
+  bool has_pps_avs;
+};
 
 #ifdef CONFIG_MCU_MODEL_SW3566
 constexpr uint8_t NUM_PORTS = CONFIG_SW3566_COUNT;
 #elifdef CONFIG_MCU_MODEL_FAKE_SW3566
 constexpr uint8_t NUM_PORTS = CONFIG_FAKE_SW3566_COUNT;
+#else
+constexpr uint8_t NUM_PORTS = 5;
 #endif
 
 enum class PortManagerEventType {
 #ifdef CONFIG_INTERFACE_TYPE_UART
   UART_MESSAGE = (1 << 0),
 #endif
-  TERMINATE_EVENT = 0xFF,
+TERMINATE_EVENT = 0xFF,
 };
 
 struct PortManagerEvent {
@@ -41,6 +54,9 @@ struct PortManagerEvent {
   union {
 #ifdef CONFIG_INTERFACE_TYPE_UART
     uart_message_t uart_msg;
+#endif
+#ifdef CONFIG_INTERFACE_TYPE_I2C
+    i2c_message_t i2c_msg;
 #endif
   };
 };
@@ -119,15 +135,26 @@ class PortManager {
   PortManager(const PortManager&) = delete;
   PortManager& operator=(const PortManager&) = delete;
 
-  size_t Size() const { return ports_.size(); }
+  /**
+   * @brief Gets the total number of ports managed by this PortManager.
+   *
+   * This method returns the current count of all ports, including both active
+   * and inactive ports that are registered with this manager.
+   *
+   * @return size_t The number of ports managed by this instance.
+   * @retval 0 No ports are currently managed.
+   *
+   * @note This operation is O(1) and thread-safe for read access.
+   */
+  size_t PortCount() const { return ports_.size(); }
 
-  void StartTask();
+  void Start();
+  void Stop();
 
 #ifdef CONFIG_INTERFACE_TYPE_UART
   void EnqueueUARTMessage(const uart_message_t& uart_msg, uint8_t port_id);
 #endif
-
-  bool InitializePort(uint8_t port_id, bool active,
+bool InitializePort(uint8_t port_id, bool active,
                       uint8_t initial_power_budget);
   Port* GetPort(uint8_t port_id);
 
@@ -136,6 +163,8 @@ class PortManager {
 
   // All ports data functions
   uint16_t GetPortsPowerUsage() const;
+  uint32_t GetTotalOperatingPower() const;
+  VoltageRequirements GetVoltageRequirements() const;
   uint8_t GetPortsBitMask(PortPredicate predicate) const;
   uint8_t GetOpenPortsBitMask() const;
   uint8_t GetAttachedPortsBitMask() const;
@@ -286,7 +315,9 @@ class PortManager {
   // Helper function
   void CheckAttachedPort(const Port& port);
 
-  // Handler functions
+  // Task functions
+
+// Handler functions
 #ifdef CONFIG_INTERFACE_TYPE_UART
   void HandleUARTMessage(const PortManagerEvent& event);
   void HandleBroadcastMessage(const uart_message_t& uart_msg);
@@ -296,7 +327,6 @@ class PortManager {
   void HandleUncorrectableError(Port& port, const uart_message_t& uart_msg);
   void HandleChargingAlert(Port& port, const uart_message_t& uart_msg);
   void HandleKeepAliveMessage(Port& port, const uart_message_t& uart_msg);
-  void HandlePDPCapDataMessage(Port& port, const uart_message_t& uart_msg);
 #endif
 };
 

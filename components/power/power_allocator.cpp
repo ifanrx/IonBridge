@@ -2,9 +2,10 @@
 
 #include <cinttypes>
 #include <cstdint>
+#include <cstring>
+#include <memory>
 #include <utility>
 
-#include "esp_check.h"
 #include "esp_err.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -52,11 +53,11 @@ PowerAllocator &PowerAllocator::GetInstance() {
 PowerAllocator::PowerAllocator()
     : port_manager_(PortManager::GetInstance()),
       strategy_(nullptr),
-      cooldown_period_secs_(0),
       apply_period_(0),
       timer_handle_(nullptr),
       timer_period_(0),
-      temperature_mode_(TemperatureMode::POWER_PRIORITY) {}
+      temperature_mode_(TemperatureMode::POWER_PRIORITY) {
+  }
 
 esp_err_t PowerAllocator::Start() {
   if (taskRunning_) {
@@ -78,11 +79,25 @@ esp_err_t PowerAllocator::Start() {
         .name = "allocator_timer",
         .skip_unhandled_events = true,
     };
-    ESP_RETURN_ON_ERROR(esp_timer_create(&allocator_timer_args, &timer_handle_),
-                        TAG, "Failed to create timer");
-    ESP_RETURN_ON_ERROR(
-        esp_timer_start_periodic(timer_handle_, timer_period_ * 1e3), TAG,
-        "Failed to start allocator timer");
+    esp_err_t timer_err =
+        esp_timer_create(&allocator_timer_args, &timer_handle_);
+    if (timer_err != ESP_OK) {
+      ESP_LOGE(TAG, "Failed to create timer");
+      vQueueDelete(eventQueue_);
+      eventQueue_ = nullptr;
+      return timer_err;
+    }
+
+    esp_err_t start_err =
+        esp_timer_start_periodic(timer_handle_, timer_period_ * 1e3);
+    if (start_err != ESP_OK) {
+      ESP_LOGE(TAG, "Failed to start allocator timer");
+      esp_timer_delete(timer_handle_);
+      timer_handle_ = nullptr;
+      vQueueDelete(eventQueue_);
+      eventQueue_ = nullptr;
+      return start_err;
+    }
   }
 
   BaseType_t res =
@@ -90,6 +105,14 @@ esp_err_t PowerAllocator::Start() {
                   this, CONFIG_POWER_ALLOCATOR_TASK_PRIORITY, &taskHandle_);
   if (res != pdPASS) {
     ESP_LOGE(TAG, "Unable to create power_allocator task");
+    // Clean up timer and queue
+    if (timer_handle_ != nullptr) {
+      esp_timer_stop(timer_handle_);
+      esp_timer_delete(timer_handle_);
+      timer_handle_ = nullptr;
+    }
+    vQueueDelete(eventQueue_);
+    eventQueue_ = nullptr;
     return ESP_ERR_NO_MEM;
   }
 
@@ -105,12 +128,10 @@ uint16_t PowerAllocator::AddApplyCount() {
   return apply_count_;
 }
 
-void PowerAllocator::Configure(PowerStrategy *strategy,
-                               uint32_t cooldown_period_secs,
-                               uint32_t apply_period, uint32_t timer_period,
+void PowerAllocator::Configure(PowerStrategy *strategy, uint32_t apply_period,
+                               uint32_t timer_period,
                                TemperatureMode temperature_mode) {
   strategy_ = std::unique_ptr<PowerStrategy>(strategy);
-  cooldown_period_secs_ = cooldown_period_secs;
   apply_period_ = apply_period;
   timer_period_ = timer_period;
   temperature_mode_ = temperature_mode;
@@ -131,7 +152,7 @@ void PowerAllocator::TaskLoopWrapper(void *pvParameters) {
 
 void PowerAllocator::TaskLoop() {
   ESP_LOGI(TAG, "Starting power_allocator");
-  taskRunning_ = true;
+  taskRunning_ = true;  // Set running flag here in the task
   PowerAllocatorEvent event;
 
   while (taskRunning_ && eventQueue_ != nullptr) {
@@ -141,14 +162,6 @@ void PowerAllocator::TaskLoop() {
       switch (event.event_type) {
         case PowerAllocatorEventType::EXECUTE:
           Execute();
-          break;
-
-        case PowerAllocatorEventType::PORT_ATTACHED:
-          PortAttached(event.port_id);
-          break;
-
-        case PowerAllocatorEventType::PORT_DETACHED:
-          PortDetached(event.port_id);
           break;
 
         case PowerAllocatorEventType::REALLOCATE:
@@ -180,45 +193,29 @@ void PowerAllocator::Stop() {
     timer_handle_ = nullptr;
   }
   taskRunning_ = false;
+  // Note: eventQueue_ will be cleaned up by the task itself in TaskLoop()
 }
 
 esp_err_t PowerAllocator::EnqueueEvent(PowerAllocatorEvent event) {
   // Check if the event queue is initialized
   if (eventQueue_ == nullptr) {
     ESP_LOGE(TAG, "Event queue is not initialized");
-    return errQUEUE_FULL;
+    return ESP_ERR_INVALID_STATE;
   }
 
-  BaseType_t res;
-
-  // Prioritize port attach/detach events by sending them to the front of the
-  // queue
-  if (event.event_type == PowerAllocatorEventType::PORT_ATTACHED ||
-      event.event_type == PowerAllocatorEventType::PORT_DETACHED) {
-    res = xQueueSendToFront(eventQueue_, &event, EVENT_ENQUEUE_TIMEOUT);
-
-    if (res == errQUEUE_FULL) {
-      // Remove the oldest event to make room for the new one
-      PowerAllocatorEvent oldest_event;
-      xQueueReceive(eventQueue_, &oldest_event, 0);
-      ESP_LOGW(TAG,
-               "Queue full: removed oldest event to enqueue new port event");
-      res = xQueueSendToFront(eventQueue_, &event, EVENT_ENQUEUE_TIMEOUT);
-    }
-  } else {
-    // Enqueue other events normally
-    res = xQueueSend(eventQueue_, &event, EVENT_ENQUEUE_TIMEOUT);
-  }
+  BaseType_t res = xQueueSend(eventQueue_, &event, EVENT_ENQUEUE_TIMEOUT);
 
   // Log a warning if the queue remains full after attempts to enqueue
   if (res == errQUEUE_FULL) {
     ESP_LOGW(TAG, "Event queue is full; dropping event");
+    return ESP_ERR_TIMEOUT;  // Convert to ESP error code
   } else if (res != pdPASS) {
     // Log an error if any other queue operation fails
     ESP_LOGE(TAG, "Failed to enqueue power allocator event: %d", (int)res);
+    return ESP_FAIL;  // Generic failure
   }
 
-  return res;
+  return ESP_OK;  // Success
 }
 
 esp_err_t PowerAllocator::EnqueueEvent(PowerAllocatorEventType event_type,
@@ -258,12 +255,10 @@ void PowerAllocator::timer_callback_(void *arg) {
 }
 
 void PowerAllocator::Execute() {
-  static uint8_t prev_ports_connected_status = 0;
   static uint32_t executed = 0;
-  uint8_t ports_connected_status = 0;
-  bool switched = false;
 
-  if (OverTempLimitDetect()) {
+  // Check if allocator has been started
+  if (!IsStarted()) {
     return;
   }
 
@@ -275,36 +270,27 @@ void PowerAllocator::Execute() {
   this->executing_ = true;
   executed++;
 
-  switched = SwitchStrategy();
-  if (power_allocation_enabled_ && switched) {
-    ESP_LOGI(TAG, "Power strategy changed to %d, initializing power allocator",
-             strategy_->Type());
-    strategy_->SetupInitialPower(port_manager_);
-    prev_ports_connected_status = port_manager_.GetAttachedPortsBitMask();
+  if (!power_allocation_enabled_) {
+    if (executed % 600 == 0 && esp_timer_get_time() < 10 * 60 * 1e6) {
+      ESP_LOGI(TAG, "Power allocation is disabled");
+    }
     goto RET;
   }
 
-  if (power_allocation_enabled_) {
-    HighTempDetect();
+  if (SwitchStrategy() && strategy_ != nullptr) {
+    ESP_LOGI(TAG, "Power strategy changed to %d, initializing power allocator",
+             strategy_->Type());
+    strategy_->Setup(port_manager_);
+    goto RET;
   }
 
-  ports_connected_status = port_manager_.GetAttachedPortsBitMask();
+  HighTempDetect();
 
-  if (((executed % apply_period_) == 0 ||
-       ports_connected_status != prev_ports_connected_status) &&
-      strategy_ != nullptr) {
-    if (power_allocation_enabled_) {
-      ESP_LOGD(TAG, "Power strategy applied, execution count: %" PRIu32,
-               executed);
-      kRemainingPower = strategy_->Apply(port_manager_);
-    }
-  }
-
-  prev_ports_connected_status = ports_connected_status;
-
-  if (!power_allocation_enabled_ && executed % 600 == 0 &&
-      esp_timer_get_time() < 10 * 60 * 1e6) {
-    ESP_LOGI(TAG, "Power allocation is disabled");
+  if (strategy_ != nullptr &&
+      strategy_->ShouldApply(port_manager_, (executed % apply_period_) == 0)) {
+    ESP_LOGD(TAG, "Power strategy applied, execution count: %" PRIu32,
+             executed);
+    kRemainingPower = strategy_->Apply(port_manager_);
   }
 
 RET:
@@ -322,16 +308,67 @@ void PowerAllocator::GetAllocationData(uint16_t *power_budget,
   }
 }
 
-void PowerAllocator::PortAttached(uint8_t port_id) {
-  if (strategy_ != nullptr) {
-    Execute();
+void PowerAllocator::GetChargingConfig(StrategyType &type, uint16_t *identifier,
+                                       PowerAllocationTable *table) const {
+  if (strategy_ == nullptr) {
+    type = StrategyType::UNKNOWN_STRATEGY;
+    return;
+  }
+
+  type = strategy_->Type();
+
+  // Only populate additional fields for STATIC_CHARGING
+  if (type == StrategyType::STATIC_CHARGING && strategy_ != nullptr) {
+    auto static_strategy = GetStrategyAs<PowerStaticChargingStrategy>();
+    if (static_strategy != nullptr) {
+      if (identifier != nullptr) {
+        *identifier = static_strategy->GetIdentifier();
+      }
+      if (table != nullptr) {
+        const PowerAllocationTable &strategy_table =
+            static_strategy->GetTable();
+        std::memcpy(table, &strategy_table, sizeof(PowerAllocationTable));
+      }
+    }
   }
 }
 
-void PowerAllocator::PortDetached(uint8_t port_id) {
-  if (strategy_ != nullptr) {
-    Execute();
+esp_err_t PowerAllocator::SetChargingConfig(StrategyType type,
+                                            uint16_t identifier,
+                                            const PowerAllocationTable *table) {
+  // Don't set TEMPORARY_CHARGING via config sync
+  if (type == StrategyType::TEMPORARY_CHARGING) {
+    ESP_LOGW(TAG, "Cannot set TEMPORARY_CHARGING via config sync");
+    return ESP_ERR_INVALID_ARG;
   }
+
+  switch (type) {
+    case StrategyType::SLOW_CHARGING:
+      SetStrategy<PowerSlowChargingStrategy>();
+      break;
+    case StrategyType::STATIC_CHARGING:
+      if (table != nullptr) {
+        SetStrategy<PowerStaticChargingStrategy>(*table, identifier);
+      } else {
+        ESP_LOGE(TAG, "STATIC_CHARGING requires allocation table");
+        return ESP_ERR_INVALID_ARG;
+      }
+      break;
+    case StrategyType::LEGACY_CHARGING:
+      SetStrategy<PowerSlowChargingStrategy>();
+      break;
+    case StrategyType::USBA_CHARGING:
+      SetStrategy<PowerUSBAChargingStrategy>();
+      break;
+    case StrategyType::HIGH_PERFORMANCE_CHARGING:
+      SetStrategy<PowerHighPerformanceStrategy>();
+      break;
+    default:
+      ESP_LOGE(TAG, "Unknown strategy type: %d", static_cast<int>(type));
+      return ESP_ERR_INVALID_ARG;
+  }
+
+  return ESP_OK;
 }
 
 void PowerAllocator::Reallocate() {
@@ -341,34 +378,48 @@ void PowerAllocator::Reallocate() {
 }
 
 bool PowerAllocator::SwitchStrategy() {
-  bool switched = false;
-  if (strategy_buffer_) {
-    switch (strategy_buffer_->Type()) {
-      case StrategyType::SLOW_CHARGING:
-        type_ = FLEXAI_SLOW_ALLOCATOR;
-        break;
-      case StrategyType::STATIC_CHARGING:
-        type_ = STATIC_ALLOCATOR;
-        break;
-      case StrategyType::TEMPORARY_CHARGING:
-        type_ = TEMPORARY_ALLOCATOR;
-        break;
-      case StrategyType::USBA_CHARGING:
-        type_ = USBA_ALLOCATOR;
-        break;
-      default:
-        ESP_LOGW(TAG, "Unsupported strategy: %d", strategy_buffer_->Type());
-        strategy_buffer_.reset();  // Automatically deletes the strategy
-        goto RET;
-        break;
-    }
-    strategy_->Teardown(port_manager_);
-    strategy_ = std::move(strategy_buffer_);
-    switched = true;
+  if (!strategy_buffer_) {
+    // No strategy buffer, nothing to switch
+    return false;
+  }
+  if (strategy_ && strategy_buffer_->IsSameStrategy(*strategy_)) {
+    // No need to switch, the same strategy is already in use
+    strategy_buffer_.reset();
+    return false;
   }
 
-RET:
-  return switched;
+  switch (strategy_buffer_->Type()) {
+    case StrategyType::SLOW_CHARGING:
+      type_ = FLEXAI_SLOW_ALLOCATOR;
+      break;
+    case StrategyType::STATIC_CHARGING:
+      type_ = STATIC_ALLOCATOR;
+      break;
+    case StrategyType::TEMPORARY_CHARGING:
+      type_ = TEMPORARY_ALLOCATOR;
+      break;
+    case StrategyType::USBA_CHARGING:
+      type_ = USBA_ALLOCATOR;
+      break;
+    case StrategyType::HIGH_PERFORMANCE_CHARGING:
+      type_ = HIGH_PERFORMANCE_ALLOCATOR;
+      break;
+    case StrategyType::ULTRA_FAST_SINGLE_PORT_CHARGING:
+      type_ = ULTRA_FAST_SINGLE_PORT_ALLOCATOR;
+      break;
+    default:
+      ESP_LOGW(TAG, "Unsupported strategy: %d", strategy_buffer_->Type());
+      strategy_buffer_.reset();  // Automatically deletes the strategy
+      return false;
+  }
+
+  // Only call teardown if there's an existing strategy
+  if (strategy_) {
+    strategy_->Teardown(port_manager_);
+  }
+  strategy_ = std::move(strategy_buffer_);
+
+  return true;
 }
 
 void PowerAllocator::ReducePowerBudget(uint8_t max_power, uint8_t decreasement,
@@ -383,23 +434,24 @@ void PowerAllocator::ReducePowerBudget(uint8_t max_power, uint8_t decreasement,
 }
 
 void PowerAllocator::HighTempDetect() {
-  // Monitor device temperature and adjust power allocation
+  // Temperature monitoring disabled - temperature component removed
 }
 
 esp_err_t PowerAllocator::SetTemperatureMode(TemperatureMode mode) {
-  temperature_mode_ = mode;
   switch (mode) {
-    case TemperatureMode::POWER_PRIORITY: {
+    case TemperatureMode::POWER_PRIORITY:
+      temperature_mode_ = mode;
       set_power_temperature_thresholds(CONFIG_DEVICE_HIGH_TEMP_THRESHOLD,
                                        CONFIG_DEVICE_LOW_TEMP_THRESHOLD);
       break;
-    }
-    case TemperatureMode::TEMPERATURE_PRIORITY: {
+    case TemperatureMode::TEMPERATURE_PRIORITY:
+      temperature_mode_ = mode;
       set_power_temperature_thresholds(
           CONFIG_DEVICE_HIGH_TEMP_THRESHOLD_IN_TEMPERATURE_PRIORITY,
           CONFIG_DEVICE_LOW_TEMP_THRESHOLD_IN_TEMPERATURE_PRIORITY);
       break;
-    }
+    case TemperatureMode::MAX:
+      return ESP_ERR_INVALID_ARG;
   }
   return ESP_OK;
 }
@@ -413,11 +465,6 @@ const PowerStrategy *PowerAllocator::GetStrategyAs<PowerStrategy>() const {
   return strategy_.get();
 }
 
-bool PowerAllocator::OverTempLimitDetect() {
-  static bool over_temp_limit = false;
-  return over_temp_limit;
-}
-
 PowerAllocator &AllocatorBuilder::Build() {
   PortManager &port_manager = PortManager::GetInstance();
 
@@ -426,8 +473,7 @@ PowerAllocator &AllocatorBuilder::Build() {
   }
 
   PowerAllocator &allocator = PowerAllocator::GetInstance();
-  allocator.Configure(strategy_, cooldown_period_secs_, apply_period_,
-                      timer_period_);
+  allocator.Configure(strategy_, apply_period_, timer_period_);
 
   ESP_LOGD(TAG, "Power allocator configured");
   return allocator;

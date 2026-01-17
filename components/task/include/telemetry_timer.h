@@ -13,11 +13,12 @@ class TelemetryTimer {
   TelemetryTimerFunc func;
   milliseconds interval;
   steady_clock::time_point next_trigger;
-  bool runnable = false;
+  bool runnable = false, power_on_only = false;
 
  public:
-  TelemetryTimer(TelemetryTimerFunc func, uint16_t interval_ms)
-      : func(func), interval(interval_ms) {
+  TelemetryTimer(TelemetryTimerFunc func, uint16_t interval_ms,
+                 bool power_on_only = false)
+      : func(func), interval(interval_ms), power_on_only(power_on_only) {
     Reset();
   }
   TelemetryTimer() {
@@ -33,11 +34,14 @@ class TelemetryTimer {
     }
   }
   void Run(steady_clock::time_point now) {
-    if (runnable && now >= next_trigger) {
+    if (ShouldRun(now)) {
       func();
       Reset();
     }
   }
+
+ private:
+  bool ShouldRun(steady_clock::time_point now) const;
 };
 
 #ifdef __cplusplus

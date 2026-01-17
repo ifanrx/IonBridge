@@ -2,12 +2,19 @@
 #define MQTT_APP_H_
 
 #include <cstdint>
+#include <string>
 #include <vector>
 
+#include "admin.pb.h"
+#include "command.pb.h"
 #include "esp_err.h"
 #include "esp_timer.h"
 #include "freertos/idf_additions.h"
 #include "mqtt_client.h"
+#include "pb.h"
+#include "service.h"
+#include "telemetry.pb.h"
+#include "topic_parser.h"
 
 #define CHECK_MQTT_CONNECTED()                                       \
   ({                                                                 \
@@ -18,6 +25,11 @@
       return;                                                        \
     }                                                                \
   })
+
+typedef struct {
+  MqttTopicParser::Command::CommandInfo cmd;
+  std::vector<uint8_t> data;
+} MQTTMsg;
 
 enum class MQTTMsgTaskEvent : uint32_t {
   RECEIVED = 0,
@@ -36,26 +48,37 @@ class MQTTClient {
   char m_cert[2048];
   char m_ca_crt[4096];
 
-  char m_telemetry_topic[40];
-  char m_command_topic[40];
-
   bool m_started = false;
   bool m_connected = false;
   int64_t m_connected_at = 0;
   int64_t m_first_disconnected_at = 0;
 
   bool m_low_memory = false, m_ble_deinit = false;
-  volatile uint8_t m_publishing = 0;
   bool m_custom_broker = false;
 
   TaskHandle_t m_task = nullptr;
 
   MQTTClient();
   ~MQTTClient();
-  void init_topics();
   esp_err_t PublishBytes(const char *topic, const std::vector<uint8_t> &data,
                          int qos = 0);
   void StopInternal(bool permanently = false);
+
+  template <MqttTopicParser::Command::CommandSource ExpectedSource,
+            typename CmdEnumT, typename PbRequestT,
+            const pb_msgdesc_t *PbRequestFields, typename PbResponseT>
+  void ProcessCommandMsg(MQTTMsg &msg);
+  void ProcessEnduserMsg(MQTTMsg &msg) {
+    ProcessCommandMsg<MqttTopicParser::Command::CommandSource::ENDUSER,
+                      ServiceCommand, pb_CommandRequest,
+                      pb_CommandRequest_fields, pb_CommandResponse>(msg);
+  }
+  void ProcessAdminMsg(MQTTMsg &msg) {
+    ProcessCommandMsg<MqttTopicParser::Command::CommandSource::ADMIN,
+                      AdminCommand, pb_AdminCommandRequest,
+                      pb_AdminCommandRequest_fields, pb_AdminCommandResponse>(
+        msg);
+  }
 
  public:
   MQTTClient(MQTTClient const &) = delete;      // Delete copy constructor
@@ -65,6 +88,7 @@ class MQTTClient {
   static MQTTClient *GetInstance();  // Singleton
   static void DestroyInstance();
   void MarkForDestroy();
+  bool IsCustomBroker() { return m_custom_broker; }
 
   void TaskLoop();
 
@@ -97,8 +121,8 @@ class MQTTClient {
   void Stop(bool permanently = false);
   bool Started() { return m_started; }
   bool Connected() { return m_started && m_connected; }
-  bool Published() { return m_publishing == 0; }
 
+  void GetBrokerURI(char *uri, size_t &uri_len);
   uint16_t GetConnectionTime() const { return connection_time_; }
   uint16_t GetConnectionCount() const { return connection_count_; }
   uint32_t GetMessageTxCount() const { return message_tx_count_; }
@@ -112,7 +136,16 @@ class MQTTClient {
     return esp_timer_get_time() - m_connected_at;
   }
 
-  esp_err_t Publish(const std::vector<uint8_t> &data, int qos = 0);
+  esp_err_t Publish(std::string &topic, const std::vector<uint8_t> &data,
+                    int qos = 0) {
+    return PublishBytes(topic.c_str(), data, qos);
+  }
+  esp_err_t Publish(ServiceCommand cmd, const pb_CommandResponse &resp,
+                    int qos = 0);
+  esp_err_t Publish(AdminCommand cmd, const pb_AdminCommandResponse &resp,
+                    int qos = 0);
+  esp_err_t Publish(TelemetryCommand cmd, const pb_TelemetryData &data,
+                    int qos = 0);
   esp_err_t Subscribe();
 
   // MQTT Event callbacks
@@ -130,5 +163,7 @@ class MQTTClient {
   uint32_t message_tx_count_ = 0;
   uint32_t message_rx_count_ = 0;
 };
+
+#include "mqtt_app.tpp"  // IWYU pragma: keep
 
 #endif

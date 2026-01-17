@@ -1,0 +1,10 @@
+key,type,encoding,value
+# NVS Data Placeholder
+# This file is used to store NVS (Non-Volatile Storage) data
+# Format: key,type,encoding,value
+#
+# Example entries:
+# my_namespace,namespace,,
+# my_key,data,string,"my_value"
+# my_number,data,u32,42
+# my_binary,data,hex2bin,0102030405060708

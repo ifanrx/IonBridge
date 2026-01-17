@@ -8,7 +8,69 @@ import typing
 
 import dataclasses
 
-PORTS: list[str] = ["A", "C1", "C2", "C3", "C4"]
+
+class PortsProxy(list):
+    """透明代理类，表现得像list但能动态切换产品配置"""
+
+    FAMILIES = {
+        "CP02": ["A", "C1", "C2", "C3", "C4"],
+        "PA768S": ["C1", "C2", "C3"],
+    }
+
+    def __init__(self):
+        self._family = "CP02"  # 默认产品
+        super().__init__(self.FAMILIES[self._family])
+
+    def set_family(self, family: str):
+        """切换产品系列"""
+        if family in self.FAMILIES:
+            self._family = family
+            self.clear()
+            self.extend(self.FAMILIES[family])
+        else:
+            available = ", ".join(self.FAMILIES.keys())
+            raise ValueError(
+                f"Invalid product family: {family}. Available: {available}"
+            )
+
+    def get_family(self):
+        """获取当前产品系列"""
+        return self._family
+
+    def get_available_families(self):
+        """获取所有可用的产品系列"""
+        return list(self.FAMILIES.keys())
+
+
+# 创建全局单例
+PORTS = PortsProxy()
+
+
+class PortCommand(enum.IntEnum):
+    KEEP_ALIVE = 0x00
+    SYSTEM_RESET = 0x01
+    SET_SUBSCRIPTIONS = 0x1A
+    SET_MAX_POWER_BUDGET = 0x1B
+    GET_MAX_POWER_BUDGET = 0x1C
+    SET_PORT_STATE = 0x1D
+    GET_PORT_DETAILS = 0x1F
+    CHARGING_ALERT = 0x20
+    GET_PD_STATUS = 0x22
+    SET_POWER_FEATURES = 0x23
+    GET_POWER_FEATURES = 0x24
+    SYSTEM_FLAGS = 0x30
+
+    GET_PD_PCAP_DATA = 0xC0
+    INVALID_COMMAND = 0xFF
+
+    @classmethod
+    def from_value(cls, value):
+        try:
+            return cls(value)
+        except ValueError:
+            raise ValueError(
+                f"Invalid value {value}. Must be one of {[e.value for e in cls]}"
+            )
 
 
 class GenericStatus(enum.IntEnum):
@@ -239,36 +301,6 @@ class PowerFeatures(ctypes.LittleEndianStructure):
             self.set_feature(feature, enable)
 
 
-class UARTMetrics(ctypes.LittleEndianStructure):
-    _pack_ = 4
-    _fields_ = [
-        ("overrun", ctypes.c_uint32),
-        ("valid_msg", ctypes.c_uint32),
-        ("invalid_msg", ctypes.c_uint32),
-        ("read", ctypes.c_uint32),
-        ("processed_at", ctypes.c_uint32),
-        ("responded_at", ctypes.c_uint32),
-        ("latency", ctypes.c_uint32),
-        ("command", ctypes.c_uint16),
-    ]
-
-    def __str__(self):
-        # Creating a human-readable output
-        output = [
-            f"Overrun: {self.overrun}",
-            f"Valid Messages: {self.valid_msg}",
-            f"Invalid Messages: {self.invalid_msg}",
-            f"Read: {self.read}",
-            f"Processed At: {self.processed_at}",
-            f"Responded At: {self.responded_at}",
-            f"Latency: {self.latency}",
-            f"Command: 0x{self.command:04X}",
-        ]
-
-        # Join the list into a readable string
-        return "\n".join(output)
-
-
 class FastChargingProtocol(enum.IntEnum):
     NONE = 0
     QC2 = 1
@@ -345,6 +377,7 @@ class PortConfigInternal:
             n |= self.is_pdrpi_enabled << 2
             n |= self.is_pd_hvpps_enabled << 3
             data.extend(struct.pack("<B", n))
+            data.extend(struct.pack("<B", 0))  # reserved1 byte
         return data
 
     @classmethod
@@ -352,9 +385,9 @@ class PortConfigInternal:
         version = data[0]
         n3 = 0b0000_0001
         if version == 0:
-            version, n1, n2 = struct.unpack("<BBB", data)
+            version, n1, n2 = struct.unpack("<3B", data)
         else:
-            version, n1, n2, n3 = struct.unpack("<BBBB", data)
+            version, n1, n2, n3, reserved = struct.unpack("<5B", data)
         return cls(
             version=version,
             is_tfcp_enabled=((n1 >> 0) & 0x01) != 0,
@@ -394,49 +427,6 @@ class PortConfigInternal:
         return "\n".join(lines)
 
 
-class UARTDebugCounter(ctypes.LittleEndianStructure):
-    _pack_ = 1
-    _fields_ = [
-        ("processing", ctypes.c_uint16),
-        ("preamble0", ctypes.c_uint16),
-        ("preamble1", ctypes.c_uint16),
-        ("addr", ctypes.c_uint16),
-        ("command0", ctypes.c_uint16),
-        ("command1", ctypes.c_uint16),
-        ("length", ctypes.c_uint16),
-        ("value", ctypes.c_uint16),
-        ("checksum0", ctypes.c_uint16),
-        ("checksum1", ctypes.c_uint16),
-        ("postamble0", ctypes.c_uint16),
-        ("postamble1", ctypes.c_uint16),
-        ("reset_reason", ctypes.c_uint16 * 12),
-    ]
-
-    def __str__(self):
-        # Creating a human-readable output
-        output = [
-            f"Processing: {bool(self.processing)}",
-            f"Preamble: 0x{self.preamble0:02X}{self.preamble1:02X}",
-            f"Address: {self.addr}",
-            f"Command: 0x{self.command0:02X}{self.command1:02X}",
-            f"Length: {self.length}",
-            f"Value: {self.value}",
-            f"Checksum: 0x{self.checksum0:02X}{self.checksum1:02X}",
-            f"Postamble: 0x{self.postamble0:02X}{self.postamble1:02X}",
-        ]
-
-        # Adding the reset_reason array
-        reset_reason_str = (
-            "Reset Reason: ["
-            + ", ".join(str(self.reset_reason[i]) for i in range(12))
-            + "]"
-        )
-        output.append(reset_reason_str)
-
-        # Joining the list into a readable string
-        return "\n".join(output)
-
-
 class PortConfig(ctypes.LittleEndianStructure):
     _fields_ = [
         ("version", ctypes.c_uint8),
@@ -452,6 +442,78 @@ class PortConfig(ctypes.LittleEndianStructure):
                 value = list(value)
             fields_str.append(f"  {field_name}={value}")
         return "PortConfig(\n" + ",\n".join(fields_str) + "\n)"
+
+
+class CableCompensation:
+    """Class to handle cable compensation conversions and validations."""
+
+    # Mapping between enum values and human-readable strings
+    COMPENSATION_MAP = {0: "65mOhm", 1: "100mOhm"}
+
+    # Reverse mapping for lookups
+    STRING_TO_VALUE = {v: k for k, v in COMPENSATION_MAP.items()}
+
+    @classmethod
+    def parse(cls, value) -> int:
+        """
+        Parse a value into the corresponding enum value (0-1).
+
+        Args:
+            value: Can be string like "65mOhm", integer 0-1, or resistance value
+
+        Returns:
+            Integer value 0-1 representing the cable compensation
+        """
+        # If it's already an integer in the valid range
+        if isinstance(value, int) and 0 <= value <= 1:
+            return value
+
+        # If it's a string that matches our known formats directly
+        if isinstance(value, str) and value in cls.STRING_TO_VALUE:
+            return cls.STRING_TO_VALUE[value]
+
+        # If it's a string with a number, extract and convert
+        if isinstance(value, str):
+            try:
+                import re
+
+                # Extract numeric part (strip non-digits)
+                digits = re.sub(r"\D", "", value)
+                num_value = int(digits) if digits else 0
+
+                # Map common resistance values to enum values
+                if num_value == 65:
+                    return 0
+                elif num_value == 100:
+                    return 1
+            except ValueError:
+                pass
+
+        raise ValueError(
+            f"Invalid cable_compensation value: {value}. "
+            f"Expected one of: {list(cls.COMPENSATION_MAP.values())} or integer 0-1."
+        )
+
+    @classmethod
+    def to_string(cls, value: int) -> str:
+        """Convert enum value to human-readable string."""
+        if value not in cls.COMPENSATION_MAP:
+            raise ValueError(
+                f"Invalid cable compensation value: {value}. Expected 0-1."
+            )
+        return cls.COMPENSATION_MAP[value]
+
+    @classmethod
+    def get_choices(cls) -> list:
+        """Return list of valid string choices for CLI."""
+        return list(cls.COMPENSATION_MAP.values())
+
+    @classmethod
+    def click_callback(cls, ctx, param, value):
+        """Callback function for Click to convert string to enum value."""
+        if not value:
+            return 0  # Default value (65mOhm)
+        return cls.parse(value)
 
 
 class FixedVoltageOffset:
@@ -532,7 +594,7 @@ class SystemFlags(ctypes.LittleEndianStructure):
     _pack_ = 1
     _fields_ = [
         ("commit", ctypes.c_uint8),  # Must be 0x55 to commit
-        ("unused0", ctypes.c_uint8, 1),
+        ("enable_flash_cache", ctypes.c_uint8, 1),
         ("port_type", ctypes.c_uint8, 1),
         ("enable_cable_compensation", ctypes.c_uint8, 1),
         ("cable_compensation", ctypes.c_uint8, 1),
@@ -543,16 +605,16 @@ class SystemFlags(ctypes.LittleEndianStructure):
     def __str__(self) -> str:
         """Human-readable string representation of the structure."""
         commit = self.commit == 0x55
-        unused0 = self.unused0 == 1
+        enable_flash_cache = self.enable_flash_cache == 1
         port_type = "A" if self.port_type == 0 else "C"
         enable_cable_compensation = self.enable_cable_compensation == 1
-        cable_compensation = "65mOhm" if self.cable_compensation == 1 else "100mOhm"
+        cable_compensation = "100mOhm" if self.cable_compensation == 1 else "65mOhm"
         fixed_voltage_offset = FixedVoltageOffset.to_string(self.fixed_voltage_offset)
 
         return (
             "SystemFlags(\n"
             f"\tcommit: {commit},\n"
-            f"\tunused0: {unused0}\n"
+            f"\tenable_flash_cache: {enable_flash_cache}\n"
             f"\tport_type: {port_type}\n"
             f"\tenable_cable_compensation: {enable_cable_compensation}\n"
             f"\tcable_compensation: {cable_compensation}\n"
@@ -560,6 +622,18 @@ class SystemFlags(ctypes.LittleEndianStructure):
             ")"
         )
 
+
+@dataclasses.dataclass
+class PortProxyData:
+    port: int
+    command: PortCommand
+    data: bytes | bytearray
+
+    def serialize(self) -> bytearray:
+        return (
+            bytearray([self.port, self.command & 0xFF, (self.command >> 8) & 0xFF])
+            + self.data
+        )
 
 
 class PortType(enum.IntEnum):
@@ -588,6 +662,15 @@ class KeepAliveResponse(ctypes.LittleEndianStructure):
         ("status", ctypes.c_uint8),  # Underlying type for KeepAliveStatus
         ("_union", _Union),
     ]
+
+    @property
+    def status_enum(self) -> KeepAliveStatus:
+        """Return the status as a KeepAliveStatus enum."""
+        return KeepAliveStatus(self.status)
+
+    @status_enum.setter
+    def status_enum(self, status: KeepAliveStatus):
+        self.status = status.value
 
     @property
     def uptimeMS(self):
@@ -620,3 +703,80 @@ class KeepAliveResponse(ctypes.LittleEndianStructure):
             f"\trebootReason: 0x{self.rebootReason:08x}\n"
             ")"
         )
+
+
+class PortDetails(ctypes.LittleEndianStructure):
+    _pack_ = 1
+    _fields_ = [
+        ("session_charge", ctypes.c_uint64),  # in uWs
+        ("session_id", ctypes.c_uint16),
+        ("manufacturer_vid", ctypes.c_uint16),
+        ("manufacturer_pid", ctypes.c_uint16),
+        ("battery_vid", ctypes.c_uint16),
+        ("battery_pid", ctypes.c_uint16),
+        ("iout_value", ctypes.c_uint16),  # in mA
+        ("vout_value", ctypes.c_uint16),  # in mV
+        ("die_temperature", ctypes.c_uint16),  # in C
+        ("vin_value", ctypes.c_uint16),  # in mV
+        ("connected", ctypes.c_bool),
+        ("protocol", ctypes.c_uint8),  # FastChargingProtocol
+        ("power_budget", ctypes.c_uint8),  # in W
+        ("reserved", ctypes.c_uint8),  # Reserved for future use
+    ]
+
+    @property
+    def fc_protocol(self) -> FastChargingProtocol:
+        return FastChargingProtocol(self.protocol)
+
+    def __repr__(self) -> str:
+        return (
+            "PortDetails(\n"
+            + "\n".join(
+                [
+                    "\tconnected: " + str(self.connected),
+                    "\tprotocol: " + FastChargingProtocol(self.protocol).name,
+                    "\tiout_value: " + str(self.iout_value) + " mA",
+                    "\tvout_value: " + str(self.vout_value) + " mV",
+                    "\tdie_temperature: " + str(self.die_temperature) + " C",
+                    "\tvin_value: " + str(self.vin_value) + " mV",
+                    "\tsession_id: " + str(self.session_id),
+                    "\tsession_charge: " + str(self.session_charge) + " uWs",
+                    "\tpower_budget: " + str(self.power_budget) + " W",
+                    f"\tmanufacturer vid: 0x{self.manufacturer_vid:04X}",
+                    f"\tmanufacturer pid: 0x{self.manufacturer_pid:04X}",
+                    f"\tbattery vid: 0x{self.battery_vid:04X}",
+                    f"\tbattery pid: 0x{self.battery_pid:04X}",
+                ]
+            )
+            + "\n)"
+        )
+
+
+class GetPortDetailsResponse(ctypes.LittleEndianStructure):
+    _pack_ = 1
+    _fields_ = [
+        ("status", ctypes.c_uint32),  # Placeholder for GenericStatus type
+        ("details", PortDetails),
+    ]
+
+    def __str__(self) -> str:
+        """Human-readable string representation of the structure."""
+        status = GenericStatus(self.status)
+        return f"GetPortDetailsResponse(\n\tstatus: {status}\n)"
+
+
+class SetMaxPowerBudgetRequest(ctypes.LittleEndianStructure):
+    _pack_ = 1
+    _fields_ = [
+        ("max_power_budget", ctypes.c_uint8),  # in W
+        ("watermark", ctypes.c_uint8),  # in W
+        ("force_rebroadcast", ctypes.c_uint8, 1),
+        ("unused", ctypes.c_uint8, 7),
+    ]
+
+
+class SetMaxPowerBudgetResponse(ctypes.LittleEndianStructure):
+    _pack_ = 1
+    _fields_ = [
+        ("budget", ctypes.c_uint8),  # in W
+    ]

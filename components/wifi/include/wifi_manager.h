@@ -8,10 +8,10 @@
 #include <string>
 
 #include "esp_err.h"
+#include "sdkconfig.h"
 #include "wifi.h"
 #include "wifi_storage.h"
 
-#define WIFI_SLOT_COUNT 64
 #define WIFI_SCAN_LIST_SIZE CONFIG_ESP_WIFI_SCAN_LIST_SIZE
 
 #ifdef CONFIG_WIFI_CONNECT_SET_BSSID
@@ -36,6 +36,8 @@ class WiFiManager {
   esp_err_t GetWiFiByIndex(uint8_t index, std::string* ssid,
                            std::string* passwd, uint8_t* auth_mode) const;
   bool HasSSID(const std::string& ssid);
+  bool IsSSIDScanned(const std::string& ssid) const;
+  bool IsSSIDScanned(const char* ssid) const;
   esp_err_t GetWiFiBySSID(const std::string& ssid, std::string* passwd,
                           uint8_t* auth_mode) const;
   const std::array<uint32_t, WIFI_SLOT_COUNT>& GetHash() const {
@@ -68,11 +70,14 @@ class WiFiManager {
 
   void Reset();
 
+  bool IsFactoryWiFiFound() const { return found_factory_wifi_; }
+
  private:
   WiFiManager() {
     use_index_ = 0;
     found_count_ = 0;
     found_default_wifi_ = false;
+    found_factory_wifi_ = false;
   };
   ~WiFiManager() = default;
 
@@ -85,6 +90,7 @@ class WiFiManager {
   uint8_t use_index_ = 0;
   uint8_t found_count_ = 0;
   bool found_default_wifi_ = false;
+  bool found_factory_wifi_ = false;
   std::array<WiFiRSSI, WIFI_SLOT_COUNT> wifi_rssi_ = {};
   WiFiStorage wifi_storage_;
   std::array<ssid_info_t, WIFI_SCAN_LIST_SIZE> aps_ = {};

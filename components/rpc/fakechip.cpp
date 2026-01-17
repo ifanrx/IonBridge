@@ -11,10 +11,11 @@
 #include "esp_log.h"
 #include "esp_random.h"
 #include "esp_timer.h"
+#include "fake_sw3566_data_types.h"
 #include "ionbridge.h"
 #include "rpc.h"
 #include "sdkconfig.h"
-#include "sw3566_data_types.h"
+#include "version.h"
 
 static const char *TAG = "FakeChip";
 
@@ -35,8 +36,36 @@ uint32_t remaining_power = total_power;
 uint16_t port_current[SW3566_COUNT], port_voltage[SW3566_COUNT];
 bool port_connected[SW3566_COUNT];
 
+// Session tracking variables
+uint16_t port_session_id[SW3566_COUNT];
+uint64_t port_session_charge[SW3566_COUNT];    // in microwatt-seconds (µWs)
+uint64_t port_last_update_time[SW3566_COUNT];  // in microseconds
+
+static struct {
+  uint16_t manufacturer_vid;
+  uint16_t manufacturer_pid;
+  uint16_t battery_vid;
+  uint16_t battery_pid;
+  uint16_t cable_vid;
+  uint16_t cable_pid;
+} SINK_PD_INFO[SW3566_COUNT] = {
+    {0, 0, 0, 0, 0, 0},                      // SW3566 0
+    {0x05ac, 0x7315, 0, 0, 0x36e9, 0x3000},  // SW3566 1: MackBook Pro (M4 Pro)
+    {0x05ac, 0x7117, 0, 0, 0x36e9, 0x3001},  // SW3566 2: iPad Pro 7th Gen
+#if SW3566_COUNT > 3
+    {0x05ac, 0x7515, 0, 0, 0x36e9, 0x3002},  // SW3566 3: iPhone 16 Series
+#endif
+#if SW3566_COUNT > 4
+    {0x05ac, 0x7803, 0, 0, 0x36e9, 0x3003},  // SW3566 4: Vision Pro
+#endif
+};
+
 esp_err_t read_adc(uint8_t mcu, ADC adc, bool raw, uint16_t *value);
 uint8_t generate_nonce();
+void update_session_charge(uint8_t mcu);
+static uint32_t get_max_voltage(uint8_t mcu);
+static uint32_t get_max_power_limit(uint8_t mcu);
+static uint32_t get_max_iout_value(uint8_t mcu);
 
 esp_err_t rpc::mcu::send_command(uint8_t mcu, uint16_t command,
                                  const uint8_t *request, uint8_t request_size,
@@ -55,6 +84,8 @@ esp_err_t rpc::mcu::keep_alive(uint8_t mcu, KeepAliveStatus *status,
   KeepAliveResponse res{
       .nonce = generate_nonce(),
       .status = USER_APPLICATION_ALIVE,
+      .uptimeMS = 0,
+      .rebootReason = 0,
   };
   if (status != nullptr) {
     memcpy(status, &res.status, sizeof(res.status));
@@ -70,13 +101,23 @@ esp_err_t rpc::mcu::keep_alive(uint8_t mcu, KeepAliveStatus *status,
 
 esp_err_t rpc::mcu::boot(uint8_t mcu) { return ESP_OK; }
 
-esp_err_t rpc::mcu::bringup(uint8_t mcu, bool skip_upgrade) {
-  ESP_LOGI(TAG, "SW3566 %d is now brought up", mcu);
-  port_fc_proto[mcu] = FC_NOT_CHARGING;
+esp_err_t rpc::mcu::reset_system(uint8_t mcu, bool wait_for_response) {
+  ESP_LOGE(TAG, "SW3566 %d is now reset", mcu);
   return ESP_OK;
 }
 
-esp_err_t rpc::mcu::boot_all(bool *booted, uint8_t count, bool skip_upgrade) {
+esp_err_t rpc::mcu::bringup(uint8_t mcu, bool, const Version *,
+                            bool *upgraded) {
+  ESP_LOGI(TAG, "SW3566 %d is now brought up", mcu);
+  port_fc_proto[mcu] = FC_NOT_CHARGING;
+  if (upgraded != nullptr) {
+    *upgraded = false;  // Fake chip never upgrades
+  }
+  return ESP_OK;
+}
+
+esp_err_t rpc::mcu::boot_all(bool *booted, uint8_t count, bool skip_upgrade,
+                             bool *any_upgraded) {
   if (booted == NULL) {
     return ESP_ERR_INVALID_ARG;
   }
@@ -92,6 +133,10 @@ esp_err_t rpc::mcu::boot_all(bool *booted, uint8_t count, bool skip_upgrade) {
     }
     port_connect(i);
   }
+
+  if (any_upgraded != nullptr) {
+    *any_upgraded = false;  // Fake chip never upgrades
+  }
   return ESP_OK;
 }
 
@@ -99,15 +144,25 @@ esp_err_t rpc::mcu::set_port_state(uint8_t mcu, bool shutdown) {
   if (shutdown) {
     port_fc_proto[mcu] = FC_NOT_CHARGING;
     port_connected[mcu] = false;
+    // Reset session charge when port is detached
+    port_session_charge[mcu] = 0;
     return ESP_OK;
   }
-  port_fc_proto[mcu] = esp_random() % 7 + 12;
+  port_fc_proto[mcu] = esp_random() % 6 + FC_PD_Fix5V;
   port_uptime[mcu] = esp_timer_get_time();
   port_connected[mcu] = true;
+
+  // Increment session ID when port is attached
+  port_session_id[mcu]++;
+  // Reset session charge for new session
+  port_session_charge[mcu] = 0;
+  // Record start time for charge calculation
+  port_last_update_time[mcu] = esp_timer_get_time();
+
   return ESP_OK;
 }
 
-esp_err_t rpc::mcu::set_subscription(uint8_t mcu, Subscriptions &subs) {
+esp_err_t rpc::mcu::set_subscription(uint8_t mcu, const Subscriptions &subs) {
   return ESP_OK;
 }
 
@@ -121,13 +176,13 @@ esp_err_t read_adc(uint8_t mcu, ADC adc, bool raw, uint16_t *value) {
 
   // Determine range and scale accordingly.
   uint16_t new_value, max_value;
-  uint32_t max_power = (mcu == 0 ? 60 : 140) * 1e3;  // mW
+  uint32_t max_power = (get_max_power_limit(mcu)) * 1e3;  // mW
   switch (adc) {
     case Iout:
-      max_value = 5000;
+      max_value = get_max_iout_value(mcu);
       break;
     case Vout:
-      max_value = mcu == 0 ? 12000 : 28000;
+      max_value = get_max_voltage(mcu);
       break;
     case Die:
       max_value = 50;
@@ -176,6 +231,27 @@ esp_err_t get_port_connected(uint8_t mcu, bool *connected) {
   return ESP_OK;
 }
 
+void update_session_charge(uint8_t mcu) {
+  if (!port_connected[mcu]) {
+    return;  // Port not connected, no charge to update
+  }
+
+  uint64_t current_time = esp_timer_get_time();  // in microseconds
+  uint64_t elapsed_time = current_time - port_last_update_time[mcu];
+
+  // Use a fixed power value of 10W (10000 mW) for simulation
+  const uint32_t fixed_power_mw = 10000;
+
+  // Calculate charge increment: power (mW) * time (µs) = µWs
+  uint64_t charge_increment = fixed_power_mw * elapsed_time;
+
+  // Add to cumulative session charge
+  port_session_charge[mcu] += charge_increment;
+
+  // Update last update time
+  port_last_update_time[mcu] = current_time;
+}
+
 esp_err_t rpc::mcu::get_pd_status(uint8_t mcu, ClientPDStatus *status) {
   uint16_t bat_capacity = static_cast<uint16_t>(esp_random()) & 0xFFF;
   uint16_t battery_design_capacity =
@@ -183,17 +259,16 @@ esp_err_t rpc::mcu::get_pd_status(uint8_t mcu, ClientPDStatus *status) {
   uint16_t battery_last_full_charge_capacity =
       bat_capacity - (esp_random() % bat_capacity) * 0.2;
 
-  ClientPDStatus pdstatus = {
-      .battery_vid = 0x19d1,
-      .battery_pid = static_cast<uint16_t>(esp_random()),
-      .battery_design_capacity = bat_capacity,
-      .battery_last_full_charge_capacity = battery_design_capacity,
-      .battery_present_capacity = battery_last_full_charge_capacity,
-      .cable_vid = 0x05ac,
-      .cable_pid = static_cast<uint16_t>(esp_random()),
-      .manufacturer_vid = 0x36e9,
-      .manufacturer_pid = static_cast<uint16_t>(esp_random()),
-  };
+  ClientPDStatus pdstatus = {};
+  pdstatus.battery_vid = SINK_PD_INFO[mcu].battery_vid;
+  pdstatus.battery_pid = SINK_PD_INFO[mcu].battery_pid;
+  pdstatus.battery_design_capacity = bat_capacity;
+  pdstatus.battery_last_full_charge_capacity = battery_design_capacity;
+  pdstatus.battery_present_capacity = battery_last_full_charge_capacity;
+  pdstatus.cable_vid = SINK_PD_INFO[mcu].cable_vid;
+  pdstatus.cable_pid = SINK_PD_INFO[mcu].cable_pid;
+  pdstatus.manufacturer_vid = SINK_PD_INFO[mcu].manufacturer_vid;
+  pdstatus.manufacturer_pid = SINK_PD_INFO[mcu].manufacturer_pid;
   memcpy(status, &pdstatus, sizeof(pdstatus));
   return ESP_OK;
 }
@@ -206,6 +281,9 @@ esp_err_t rpc::mcu::get_port_details(uint8_t mcu, PortDetails *details) {
   uint16_t vin;
   uint16_t vout;
 
+  // Update session charge before reporting
+  update_session_charge(mcu);
+
   read_adc(mcu, Die, true, &die_temperature);
   read_adc(mcu, Iout, true, &iout);
   read_adc(mcu, Vin, true, &vin);
@@ -216,14 +294,17 @@ esp_err_t rpc::mcu::get_port_details(uint8_t mcu, PortDetails *details) {
   get_port_connected(mcu, &connected);
 
   // Populate PortDetails structure
-  PortDetails result = {
-      .connected = connected,
-      .fc_protocol = protocol,
-      .iout_value = iout,
-      .vout_value = vout,
-      .die_temperature = die_temperature,
-      .vin_value = vin,
-  };
+  PortDetails result = {};
+  result.connected = connected;
+  result.fc_protocol = protocol;
+  result.iout_value = iout;
+  result.vout_value = vout;
+  result.die_temperature = die_temperature;
+  result.vin_value = vin;
+
+  // Add session tracking fields
+  result.session_id = port_session_id[mcu];
+  result.session_charge = port_session_charge[mcu];
 
   // Copy the populated details to the output parameter
   memcpy(details, &result, sizeof(result));
@@ -247,7 +328,7 @@ esp_err_t rpc::mcu::set_max_power_budget(uint8_t mcu, uint8_t budget,
                                          bool force_rebroadcast,
                                          uint8_t *set_budget) {
   // Limit budget based on MCU type
-  budget = MIN(budget, (mcu == 0) ? 60 : 140);
+  budget = MIN(budget, get_max_power_limit(mcu));
 
   // Update port power and current parameters
   port_power_cap[mcu] = budget * 1000;
@@ -257,7 +338,7 @@ esp_err_t rpc::mcu::set_max_power_budget(uint8_t mcu, uint8_t budget,
 
   // Ensure voltage does not exceed the maximum limit for each MCU type
   port_voltage[mcu] =
-      MIN(port_voltage[mcu], (mcu == 0) ? 12000 : 28000);  // Voltage in mV
+      MIN(port_voltage[mcu], get_max_voltage(mcu));  // Voltage in mV
 
   // Calculate power in milliwatts
   port_power[mcu] = port_voltage[mcu] * port_current[mcu] / 1e3;  // Power in mW
@@ -298,13 +379,44 @@ esp_err_t rpc::mcu::set_system_flags(uint8_t mcu, SystemFlags *flags) {
   }
   *flags = {
       .commit = 0,
-      .unused0 = true,
+      .enable_flash_cache = true,
       .port_type = 1,
+      .enable_cable_compensation = true,
       .cable_compensation = 1,
+      .fixed_voltage_offset = 0,
       .unused = 0,
   };
   if (mcu == 0) {
     flags->port_type = 0;
   }
   return ESP_OK;
+}
+
+uint32_t get_max_voltage(uint8_t mcu) {
+  if (FAKE_SW3566_IS_TYPE_A(mcu)) {
+    return 12000;
+  }
+#ifdef CONFIG_PRODUCT_FAMILY_VALUE
+  if (strcmp(CONFIG_PRODUCT_FAMILY_VALUE, "PA768S") == 0) {
+    return 20000;
+  }
+#endif
+  return 28000;
+}
+
+uint32_t get_max_power_limit(uint8_t mcu) {
+  return FAKE_SW3566_IS_TYPE_A(mcu) ? FAKE_SW3566_MIN_POWER   // Type A
+                                    : FAKE_SW3566_MAX_POWER;
+}
+
+static uint32_t get_max_iout_value(uint8_t mcu) {
+  if (FAKE_SW3566_IS_TYPE_A(mcu)) {
+    return 3000;
+  }
+#ifdef CONFIG_PRODUCT_FAMILY_VALUE
+  if (strcmp(CONFIG_PRODUCT_FAMILY_VALUE, "PA768S") == 0) {
+    return 3000;
+  }
+#endif
+  return 5000;
 }

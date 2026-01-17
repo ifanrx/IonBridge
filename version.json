@@ -1,17 +1,36 @@
 {
-    "version": "0.6.42",
-    "release_date": 2025010711,
-    "git_commit": "dfe92fb892533bb4c83ecae667a9f65d558b57f3",
-    "sw3566": {
-        "numeric": 2025010606,
-        "version": "0.2.48",
-        "checksum": "176eea3f83195d9b8b874438f7f3f84313fd4227"
+  "version": "0.9.11",
+  "release_date": 2026010123,
+  "git_commit": "940379f075f386aea02012157bf54d3a08bfab66",
+  "zrlib": {
+    "version": "1.8.1"
+  },
+  "SW3566": {
+    "CP02": {
+      "numeric": 2025121002,
+      "version": "0.3.16",
+      "checksum": "78bddf95f670ac4f282594261081eb214eade6ae",
+      "file_sha1": "f8d65dcd8c1141b0933150be9822641e47411805",
+      "size": 122880
     },
-    "fpga": {
-        "numeric": 2024122719,
-        "version": "0.2.7"
-    },
-    "zrlib": {
-        "version": "1.6.7"
+    "CP02S": {
+      "numeric": 2025121002,
+      "version": "0.3.16",
+      "checksum": "78bddf95f670ac4f282594261081eb214eade6ae",
+      "file_sha1": "f8d65dcd8c1141b0933150be9822641e47411805",
+      "size": 122880
     }
+  },
+  "FPGA": {
+    "CP02": {
+      "numeric": 2025011414,
+      "version": "0.2.8",
+      "size": 171307
+    },
+    "CP02S": {
+      "numeric": 2025123122,
+      "version": "0.2.11",
+      "size": 192229
+    }
+  }
 }

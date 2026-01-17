@@ -175,15 +175,20 @@ typedef struct __attribute__((packed)) {
 } ClientPDStatus;
 
 typedef struct __attribute__((packed)) {
-  bool connected;
-  FastChargingProtocol fc_protocol;
+  uint64_t session_charge;
+  uint16_t session_id;
+  uint16_t manufacturer_vid;
+  uint16_t manufacturer_pid;
+  uint16_t battery_vid;
+  uint16_t battery_pid;
   uint16_t iout_value;
   uint16_t vout_value;
   uint16_t die_temperature;
   uint16_t vin_value;
-  uint16_t session_id;
-  uint64_t session_charge;
+  bool connected;
+  FastChargingProtocol fc_protocol;
   uint8_t power_budget;
+  uint8_t reserved;
 } PortDetails;
 
 typedef struct __attribute__((packed)) {
@@ -210,7 +215,11 @@ typedef struct __attribute__((packed)) {
   bool EnablePdEPR : 1;
   bool EnablePd5V5A : 1;
   bool EnablePdHVPPS : 1;
-  uint8_t reserved : 4;
+  bool EnablePdHardResetOnRefusal : 1;
+  bool EnablePdSPRAVS : 1;
+  uint8_t reserved0 : 2;
+  // BYTE 4
+  uint8_t reserved1;
 } PowerFeatures;
 
 typedef enum __attribute__((packed)) {
@@ -218,5 +227,12 @@ typedef enum __attribute__((packed)) {
   PORT_TYPE_C = 0x01,
   PORT_TYPE_MAX,
 } PortType;
+
+// Session charge validation thresholds for detecting overflow/anomalies
+// Note: Hardware reports session_charge in µWs (microwatt-seconds), not µWh
+#define MAX_REASONABLE_SESSION_CHARGE \
+  (3600000000000ULL)                                // 1 kWh equivalent in µWs
+#define MAX_CHARGE_JUMP_PER_UPDATE (3600000000ULL)  // 1 Wh equivalent in µWs
+#define NEAR_OVERFLOW_THRESHOLD (0xFFFFFFFFFFFFF000ULL)  // Near uint64_t max
 
 #endif

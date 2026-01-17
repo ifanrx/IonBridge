@@ -1,0 +1,175 @@
+syntax = "proto3";
+
+package pb;
+
+import "data_types.proto";
+
+message AdminCommandRequest {
+  uint32 id = 1;
+  oneof payload {
+    GetDevicePasswordReq get_device_password = 10;
+    ManageFPGAConfigReq manage_fpga_config = 20;
+    ManagePowerConfigReq manage_power_config = 21;
+    ManageFeatureToggleReq manage_feature_toggle = 22;
+    SetTelemetryDebugReq set_telemetry_debug = 30;
+    SetSyslogStateReq set_syslog_state = 31;
+
+    SetSystemTimeReq set_system_time = 41;
+    SetLicenseReq set_license = 43;
+    ScheduleTaskRequest schedule_task = 44;
+    GetTaskStatusRequest get_task_status = 45;
+
+    ForwardPortReq forward_port = 60;
+    ReadADCReq read_adc = 61;
+    SetMachineConfigReq set_machine_config = 62;
+    CleanupNVSConfigsReq cleanup_nvs_configs = 63;
+    ToggleMcuGPIOReq toggle_mcu_gpio = 64;
+
+    }
+}
+
+message AdminCommandResponse {
+  uint32 id = 1;
+  CommandStatus status = 2;
+  oneof payload {
+    GetDevicePasswordResp get_device_password = 10;
+    ManageFPGAConfigResp manage_fpga_config = 20;
+    ManagePowerConfigResp manage_power_config = 21;
+    ManageFeatureToggleResp manage_feature_toggle = 22;
+    SetTelemetryDebugResp set_telemetry_debug = 30;
+    SetSyslogStateResp set_syslog_state = 31;
+
+    RequestSystemTime request_system_time = 40;
+    SetSystemTimeResp set_system_time = 41;
+    RequestLicenseInfo request_license_info = 42;
+    SetLicenseResp set_license = 43;
+    ScheduleTaskResponse schedule_task = 44;
+    GetTaskStatusResponse get_task_status = 45;
+
+    RequestShutdownBleInfo request_shutdown_ble_info = 50;
+
+    ForwardPortResp forward_port = 60;
+    ReadADCResp read_adc = 61;
+    SetMachineConfigResp set_machine_config = 62;
+    CleanupNVSConfigsResp cleanup_nvs_configs = 63;
+    ToggleMcuGPIOResp toggle_mcu_gpio = 64;
+
+    }
+}
+
+message GetDevicePasswordReq {}
+message GetDevicePasswordResp {
+  bytes password = 1;
+}
+
+message ManageFPGAConfigReq {
+  ManageAction action = 1;
+  FPGAConfig config = 2;
+  uint32 level = 3;
+}
+message ManageFPGAConfigResp {
+  FPGAConfig config = 1;
+}
+
+message ManagePowerConfigReq {
+  ManageAction action = 1;
+  PowerConfig config = 2;
+}
+message ManagePowerConfigResp {
+  PowerConfig config = 1;
+}
+
+message ManageFeatureToggleReq {
+  ManageFeature feature = 1;
+  ManageAction action = 2;
+  bool enabled = 3;
+}
+message ManageFeatureToggleResp {
+  ManageFeature feature = 1;
+  ManageAction action = 2;
+  bool enabled = 3;
+}
+
+message SetSyslogStateReq {
+  bool enable = 1;
+}
+message SetSyslogStateResp {}
+
+message SetSystemTimeReq {
+  uint32 timestamp = 1;
+}
+message SetSystemTimeResp {}
+
+message SetTelemetryDebugReq {
+  bool enable = 1;
+}
+message SetTelemetryDebugResp {}
+
+message SetLicenseReq {
+  repeated LicenseData data = 1;
+}
+
+message SetLicenseResp {}
+
+message RequestLicenseInfo {
+  bytes nonce = 1;
+}
+
+message RequestSystemTime {}
+
+message RequestShutdownBleInfo {}
+
+message ForwardPortReq {
+  uint32 port = 1;
+  uint32 command = 2;
+  bytes data = 3;
+}
+
+message ForwardPortResp {
+  uint32 command = 1;
+  bytes data = 2;
+}
+
+// Task scheduling
+message ScheduleTaskRequest {
+  Task task = 1;
+}
+message ScheduleTaskResponse {}
+
+// Get task status
+message GetTaskStatusRequest {
+  uint32 task_id = 1;
+}
+message GetTaskStatusResponse {
+  TaskExecutionStatus status = 1;
+}
+
+message ReadADCReq {}
+message ReadADCResp {
+  uint32 adc_value = 1;
+}
+
+message SetMachineConfigReq {
+  ConfigOperation operation = 1;
+  MachineConfig config = 2;      // Required for CONFIG_UPDATE, not used for CONFIG_REQUEST_UPLOAD
+}
+
+message SetMachineConfigResp {
+  bool success = 1;
+}
+
+message ToggleMcuGPIOReq {
+  uint32 port = 1;
+}
+message ToggleMcuGPIOResp {}
+
+// NVS Config Cleanup Messages (KISS)
+message CleanupNVSConfigsReq {
+  bool force = 1;  // Override safety check
+}
+
+message CleanupNVSConfigsResp {
+  bool success = 1;
+  string message = 2;  // Simple status message
+}
+

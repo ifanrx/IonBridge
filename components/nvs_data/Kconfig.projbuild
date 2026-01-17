@@ -33,11 +33,11 @@ config DISPLAY_MODE
 
 # Display Intensity Configuration
 config DISPLAY_INTENSITY
-    hex "Display Intensity"
-    default "0x80"
-    range 0x00 0xFF
+    int "Display Intensity"
+    default 100
+    range 0 100
     help
-        Set the display intensity. It is an 8-bit value.
+        Set the display intensity. It is an 0-100 percentage.
 
 config DEFAULT_SYSLOG_REPORTING_ENABLED
     bool "Default Syslog Reporting Enabled"
@@ -65,5 +65,5 @@ config ACTION_DEADZONE
     range 0 255
     help
         Action Deadzone
-        
+
 endmenu

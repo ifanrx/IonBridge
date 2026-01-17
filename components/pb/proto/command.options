@@ -1,0 +1,55 @@
+pb.* proto3_singular_msgs:true
+pb.* enum_intsize:IS_8
+
+pb.*.psn max_length:16
+pb.*.ssid max_length:32
+pb.*.password max_length:64
+pb.*.port int_size:IS_8
+pb.*.intensity int_size:IS_8
+
+pb.GetAPVersionResp.version label_override:LABEL_REQUIRED
+
+pb.GetHardwareRevisionResp.revision max_length:8
+pb.GetWiFiMACResp.mac max_length:12
+
+pb.GetChargingStatusResp.status int_size:IS_8
+pb.GetPowerHistoricalStatsReq.offset int_size:IS_16
+pb.SetPortPriorityReq.priority int_size:IS_8,max_count:5,fixed_count:true
+pb.GetPortPriorityResp.priority int_size:IS_8,max_count:5,fixed_count:true
+
+pb.GetPortPDStatusResp.pd_status label_override:LABEL_REQUIRED
+
+pb.GetAllPowerStatisticsResp.stats max_count:5,fixed_count:true
+
+pb.TurnOnPortReq.ports max_count:5
+pb.TurnOffPortReq.ports max_count:5
+
+
+pb.SetStaticAllocatorResp.identifier int_size:IS_16
+pb.GetStaticAllocatorResp.identifier int_size:IS_16
+pb.GetStaticAllocatorResp.version int_size:IS_8
+
+pb.SetPortConfigReq.configs max_count:8
+pb.GetPortConfigReq.version int_size:IS_8
+pb.GetPortConfigResp.configs max_count:8
+
+pb.GetPortCompatibilitySettingsResp.settings label_override:LABEL_REQUIRED
+
+pb.SetTemporaryAllocatorReq.power_allocation int_size:IS_8,max_count:5
+
+
+pb.GetWiFiStatusResp.bssid max_length:12
+pb.GetWiFiStatusResp.rssi int_size:IS_8
+pb.GetWiFiStatusResp.protocol int_size:IS_8
+pb.GetWiFiStatusResp.channel int_size:IS_8
+
+pb.StreamPortStatus.ports max_count:8
+pb.StreamPortPDStatus.pd_status label_override:LABEL_REQUIRED
+pb.StreamDeviceStatus.display_config label_override:LABEL_REQUIRED
+pb.StreamDeviceStatus.power_allocator_param int_size:IS_16
+pb.StreamDeviceStatus.feature_flag label_override:LABEL_REQUIRED
+
+pb.SetCustomPdoVoltageReq.port int_size:IS_8
+pb.SetCustomPdoVoltageReq.voltage_mv int_size:IS_16
+
+pb.StartProgrammerReq.product_family max_length:16

@@ -7,6 +7,15 @@ choice MCU_MODEL
     config MCU_MODEL_SW3566
         bool "SW3566"
 
+    config MCU_MODEL_SW3526
+        bool "SW3526"
+
+    config MCU_MODEL_SW3536
+        bool "SW3536"
+
+    config MCU_MODEL_SW3516
+        bool "SW3516"
+
     config MCU_MODEL_FAKE_SW3566
         bool "Fake SW3566"
 
@@ -51,6 +60,16 @@ config SW3566_TYPE_A_MAX_POWER
     help
         Maximum power for Type A ports, W
 
+config SW3566_REQUIRE_BOOTLOADER_UNLOCK
+    bool "Require bootloader unlock before flash operations"
+    depends on MCU_MODEL_SW3566
+    default n
+    help
+        Enable bootloader unlock mechanism for SW3566 chips.
+        When enabled, the system will send an unlock command before
+        erasing the user application region. Only enable for bootloader
+        versions that support and require the unlock mechanism.
+
 endmenu
 
 menu "Fake SW3566 Configuration"
@@ -86,9 +105,9 @@ config FAKE_SW3566_TYPE_A_PORT
 
 config FAKE_SW3566_TYPE_A_MAX_POWER
     int "Maximum Power for Type A Ports, W"
-    depends on FAKE_SW3566_TYPE_A_PORT != -1
-    default 60
-    range 15 60
+    default 60 if FAKE_SW3566_TYPE_A_PORT != -1
+    default FAKE_SW3566_MAX_POWER
+    range FAKE_SW3566_MIN_POWER FAKE_SW3566_MAX_POWER
     help
         Maximum power for Type A ports, W
 
@@ -209,6 +228,13 @@ config PORT_HISTORICAL_DATA_SIZE
     help
         Defines the size (in minutes) of the historical data buffer for each port.
 
+config PORT_HISTORICAL_DETAILS_SIZE
+    int "Port Historical Details Size"
+    range 1 1000
+    default 12
+    help
+        Defines the size (in minutes) of the historical details buffer for each port.
+
 config PORT_HISTORICAL_DATA_SAMPLE_RATE
     int "Port Historical Data Sample Rate"
     range 1 120
@@ -222,5 +248,14 @@ config PORT_CHECKING_TIMER_MS
     help
       Timer interval in milliseconds for the CHECKING state.
       The system will send a keep-alive message after this interval if no response is received.
+
+config PORT_SKIP_BOOT_RETRY
+    bool "Skip boot retry for failed chips"
+    default n
+    help
+        When enabled, chips that fail initial boot will not be retried.
+        This skips the GPIO reset and 3-second delay retry sequence.
+        Useful for development to avoid delays when testing with
+        incomplete hardware setups.
 
 endmenu

@@ -14,19 +14,19 @@
 #include <string>
 
 #include "cJSON.h"
+#include "data_types.h"
 #include "esp_app_desc.h"
 #include "esp_check.h"
 #include "esp_chip_info.h"
-#include "esp_core_dump.h"
 #include "esp_err.h"
 #include "esp_heap_caps.h"
 #include "esp_http_server.h"
 #include "esp_idf_version.h"
 #include "esp_log.h"
-#include "esp_partition.h"
 #include "esp_system.h"
 #include "esp_wifi.h"
 #include "esp_wifi_types_generic.h"
+#include "feature_bits.h"
 #include "freertos/idf_additions.h"
 #include "freertos/portable.h"
 #include "freertos/projdefs.h"
@@ -39,7 +39,7 @@
 #include "machine_info.h"
 #include "mqtt_app.h"
 #include "multi_heap.h"
-#include "nvs_default.h"
+#include "nvs_key.h"
 #include "nvs_namespace.h"
 #include "ping/ping_sock.h"
 #include "port.h"
@@ -51,6 +51,7 @@
 #include "wifi.h"
 
 #if defined(CONFIG_DEVICE_HUMMING_BOARD)
+#include "fpga_data_types.h"
 #include "power_config.h"
 #endif
 
@@ -72,10 +73,13 @@ static heap_task_block_t s_block_arr[MAX_BLOCK_NUM];
 #endif
 
 #ifdef CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH
+#include "esp_core_dump.h"
+#include "esp_partition.h"
+
 #define COREDUMP_CHUNK_SZ 1024
 #endif
 
-#define WEBSERVER_BUFSZ 512
+#define WEBSERVER_BUFSZ 1024
 #define MQTT_APP_URI CONFIG_MQTT_APP_URI
 
 static const char *TAG = "WebServer";
@@ -89,44 +93,10 @@ static const httpd_uri_t uri_handlers[] = {
         .handler = root_handler,
         .user_ctx = NULL,
     },
-};
+    };
 
 static httpd_handle_t server;
 static SemaphoreHandle_t server_lock = NULL;
-
-// Error Handler Implementation
-esp_err_t http_404_error_handler(httpd_req_t *req, httpd_err_code_t err) {
-  httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Not found");
-  return ESP_FAIL;
-}
-
-esp_err_t stop_web_server() {
-  if (!server_lock) {
-    ESP_LOGW(TAG, "Cannot stop Web server: server_lock is NULL");
-    return ESP_FAIL;
-  }
-
-  if (!server) {
-    ESP_LOGI(TAG, "Cannot stop Web server: server is NULL");
-    return ESP_OK;
-  }
-
-  if (xSemaphoreTake(server_lock, pdMS_TO_TICKS(100)) != pdPASS) {
-    ESP_LOGE(TAG, "Failed to take server lock");
-    return ESP_FAIL;
-  }
-
-  esp_err_t ret = httpd_stop(server);
-  if (ret == ESP_OK) {
-    server = NULL;
-    ESP_LOGI(TAG, "Web server stopped successfully");
-  } else {
-    ESP_LOGE(TAG, "Failed to stop Web server: %d", ret);
-  }
-
-  xSemaphoreGive(server_lock);
-  return ret;
-}
 
 // Start Web Server
 esp_err_t start_web_server(void) {
@@ -164,6 +134,34 @@ esp_err_t start_web_server(void) {
            hostname.c_str(), ipv4[0], ipv4[1], ipv4[2], ipv4[3]);
   xSemaphoreGive(server_lock);
   return ESP_OK;
+}
+
+esp_err_t stop_web_server() {
+  if (!server_lock) {
+    ESP_LOGD(TAG, "Cannot stop Web server: server_lock is NULL");
+    return ESP_OK;
+  }
+
+  if (!server) {
+    ESP_LOGI(TAG, "Cannot stop Web server: server is NULL");
+    return ESP_OK;
+  }
+
+  if (xSemaphoreTake(server_lock, pdMS_TO_TICKS(100)) != pdPASS) {
+    ESP_LOGE(TAG, "Failed to take server lock");
+    return ESP_FAIL;
+  }
+
+  esp_err_t ret = httpd_stop(server);
+  if (ret == ESP_OK) {
+    server = NULL;
+    ESP_LOGI(TAG, "Web server stopped successfully");
+  } else {
+    ESP_LOGE(TAG, "Failed to stop Web server: %d", ret);
+  }
+
+  xSemaphoreGive(server_lock);
+  return ret;
 }
 
 // Common Utilities
@@ -220,46 +218,143 @@ esp_err_t root_handler(httpd_req_t *req) {
   httpd_resp_sendstr_chunk(req, buffer);
   httpd_resp_sendstr_chunk(req, "</table>");
 
-  // Port Metrics Table
-  httpd_resp_sendstr_chunk(req,
-                           "<h2>Port Metrics</h2>"
-                           "<table>"
-                           "<tr>"
-                           "<th>Port ID</th>"
-                           "<th>State</th>"
-                           "<th>FC Protocol</th>"
-                           "<th>Current</th>"
-                           "<th>Voltage</th>"
-                           "</tr>");
-
+  // Detailed Port Information Tables
   PortManager &pm = PortManager::GetInstance();
   for (int i = 0; i < NUM_PORTS; i++) {
     Port *port = pm.GetPort(i);
     if (port == nullptr) {
       snprintf(buffer, sizeof(buffer),
-               "<tr>"
-               "<td>%d</td>"
-               "<td>Inactive</td>"
-               "<td colspan='3'>N/A</td>"
-               "</tr>",
+               "<h2>Port %d - Inactive</h2>"
+               "<table>"
+               "<tr><th>Status</th><td>Port not initialized</td></tr>"
+               "</table>",
                i);
       httpd_resp_sendstr_chunk(req, buffer);
       continue;
     }
 
+    // Get port data
     port->GetData(&fc_protocol, &die_temperature, &current, &voltage);
-    snprintf(buffer, sizeof(buffer),
-             "<tr>"
-             "<td>%d</td>"
-             "<td>%s</td>"
-             "<td>%u</td>"
-             "<td>%u</td>"
-             "<td>%u</td>"
-             "</tr>",
-             i, "Active", fc_protocol, current, voltage);
+
+    // Get PD status
+    ClientPDStatus pd_status = {};
+    port->GetPDStatus(&pd_status);
+
+    // Get port details
+    PortDetails details = {};
+    port->GetDetails(&details);
+
+    // Port header
+    snprintf(buffer, sizeof(buffer), "<h2>Port %d - %s</h2>", i,
+             port->Attached() ? "Connected" : "Disconnected");
     httpd_resp_sendstr_chunk(req, buffer);
+
+    // Main port table
+    httpd_resp_sendstr_chunk(req,
+                             "<table>"
+                             "<tr><th>Property</th><th>Value</th></tr>");
+
+    // Basic port information
+    snprintf(buffer, sizeof(buffer),
+             "<tr><td>State</td><td>%s</td></tr>"
+             "<tr><td>Port Type</td><td>%s</td></tr>"
+             "<tr><td>Initialized</td><td>%s</td></tr>",
+             port->GetState().ToString().c_str(),
+             port->IsTypeA() ? "Type-A" : "Type-C",
+             port->IsInitialized() ? "Yes" : "No");
+    httpd_resp_sendstr_chunk(req, buffer);
+
+    // Power data (only show FC Protocol when attached)
+    if (port->Attached()) {
+      snprintf(buffer, sizeof(buffer),
+               "<tr><td>FC Protocol</td><td>%u</td></tr>"
+               "<tr><td>Current</td><td>%umA</td></tr>"
+               "<tr><td>Voltage</td><td>%umV</td></tr>",
+               fc_protocol, current, voltage);
+      httpd_resp_sendstr_chunk(req, buffer);
+    }
+
+    // PD Status information (if available)
+    if (port->Attached() && fc_protocol >= FC_PD_Fix5V) {
+      httpd_resp_sendstr_chunk(
+          req, "<tr><td colspan='2'><strong>PD Status</strong></td></tr>");
+
+      snprintf(buffer, sizeof(buffer),
+               "<tr><td>Battery VID</td><td>0x%04X</td></tr>"
+               "<tr><td>Battery PID</td><td>0x%04X</td></tr>"
+               "<tr><td>Battery Design Capacity</td><td>%" PRIu32
+               "mWh</td></tr>"
+               "<tr><td>Battery Last Full Capacity</td><td>%" PRIu32
+               "mWh</td></tr>"
+               "<tr><td>Battery Present Capacity</td><td>%" PRIu32
+               "mWh</td></tr>"
+               "<tr><td>Battery Present</td><td>%s</td></tr>"
+               "<tr><td>Battery Status</td><td>%s</td></tr>"
+               "<tr><td>Manufacturer VID</td><td>0x%04X</td></tr>"
+               "<tr><td>Manufacturer PID</td><td>0x%04X</td></tr>"
+               "<tr><td>Cable VID</td><td>0x%04X</td></tr>"
+               "<tr><td>Cable PID</td><td>0x%04X</td></tr>"
+               "<tr><td>Operating Current</td><td>%" PRIu32
+               "mA</td></tr>"
+               "<tr><td>Operating Voltage</td><td>%" PRIu32
+               "mV</td></tr>"
+               "<tr><td>PD Revision</td><td>%d.%d</td></tr>",
+               pd_status.battery_vid, pd_status.battery_pid,
+               (uint32_t)pd_status.battery_design_capacity * 100,
+               (uint32_t)pd_status.battery_last_full_charge_capacity * 100,
+               (uint32_t)pd_status.battery_present_capacity * 100,
+               pd_status.battery_present ? "Yes" : "No",
+               pd_status.battery_status == 0   ? "Charging"
+               : pd_status.battery_status == 1 ? "Discharging"
+               : pd_status.battery_status == 2 ? "Idle"
+                                               : "Unknown",
+               pd_status.manufacturer_vid, pd_status.manufacturer_pid,
+               pd_status.cable_vid, pd_status.cable_pid,
+               (uint32_t)pd_status.operating_current * 10,
+               (uint32_t)pd_status.operating_voltage * 10,
+               pd_status.pd_revision == 0   ? 1
+               : pd_status.pd_revision == 1 ? 2
+               : pd_status.pd_revision == 3 ? 3
+                                            : 0,
+               0);
+      httpd_resp_sendstr_chunk(req, buffer);
+
+      // Cable information
+      snprintf(buffer, sizeof(buffer),
+               "<tr><td>Cable Active</td><td>%s</td></tr>"
+               "<tr><td>Cable EPR Mode Capable</td><td>%s</td></tr>"
+               "<tr><td>Cable Max VBUS Voltage</td><td>%s</td></tr>"
+               "<tr><td>Cable Max VBUS Current</td><td>%s</td></tr>"
+               "<tr><td>Cable USB Highest Speed</td><td>%s</td></tr>"
+               "<tr><td>Has eMarker</td><td>%s</td></tr>"
+               "<tr><td>PPS Charging Supported</td><td>%s</td></tr>"
+               "<tr><td>Has Battery</td><td>%s</td></tr>"
+               "<tr><td>Dual Role Power</td><td>%s</td></tr>",
+               pd_status.cable_is_active ? "Yes" : "No",
+               pd_status.cable_epr_mode_capable ? "Yes" : "No",
+               pd_status.cable_max_vbus_voltage == 0   ? "20V"
+               : pd_status.cable_max_vbus_voltage == 1 ? "30V"
+               : pd_status.cable_max_vbus_voltage == 2 ? "40V"
+               : pd_status.cable_max_vbus_voltage == 3 ? "50V"
+                                                       : "Unknown",
+               pd_status.cable_max_vbus_current == 1   ? "3A"
+               : pd_status.cable_max_vbus_current == 2 ? "5A"
+                                                       : "Unknown",
+               pd_status.cable_usb_highest_speed == 0   ? "USB 2.0"
+               : pd_status.cable_usb_highest_speed == 1 ? "USB 3.2 Gen1"
+               : pd_status.cable_usb_highest_speed == 2 ? "USB 3.2/4 Gen2"
+               : pd_status.cable_usb_highest_speed == 3 ? "USB4 Gen3"
+               : pd_status.cable_usb_highest_speed == 4 ? "USB4 Gen4"
+                                                        : "Unknown",
+               pd_status.has_emarker ? "Yes" : "No",
+               pd_status.pps_charging_supported ? "Yes" : "No",
+               pd_status.has_battery ? "Yes" : "No",
+               pd_status.dual_role_power ? "Yes" : "No");
+      httpd_resp_sendstr_chunk(req, buffer);
+    }
+
+    httpd_resp_sendstr_chunk(req, "</table>");
   }
-  httpd_resp_sendstr_chunk(req, "</table>");
 
   wifi_ap_record_t ap_info;
   // Attempt to retrieve connected AP information
@@ -297,6 +392,12 @@ esp_err_t root_handler(httpd_req_t *req) {
   httpd_resp_sendstr_chunk(req, "</table></body></html>");
   httpd_resp_send_chunk(req, NULL, 0);
 
+  return ESP_OK;
+}
+
+// Error Handler Implementation
+esp_err_t http_404_error_handler(httpd_req_t *req, httpd_err_code_t err) {
+  httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Resource not found");
   return ESP_OK;
 }
 

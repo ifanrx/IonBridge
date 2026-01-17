@@ -1,0 +1,528 @@
+syntax = "proto3";
+
+package pb;
+
+import "data_types.proto";
+
+message CommandRequest {
+  uint32 id = 1;
+  oneof payload {
+    EnableReleaseModeReq enable_release_mode = 4;
+
+    RebootDeviceReq reboot_device = 10;
+    ResetDeviceReq reset_device = 11;
+    GetDevicePSNReq get_device_psn = 12;
+    GetAPVersionReq get_ap_version = 13;
+    SetDevicePowerStateReq set_power_state = 14;
+    GetDevicePowerStateReq get_power_state = 15;
+    GetDeviceInfoReq get_device_info = 16;
+    GetHardwareRevisionReq get_hardware_revision = 17;
+
+    ScanWiFiReq scan_wifi = 20;
+    SetWiFiSSIDReq set_wifi_ssid = 21;
+    SetWiFiPasswordReq set_wifi_password = 22;
+    ResetWiFiReq reset_wifi = 23;
+    GetWiFiStatusReq get_wifi_status = 24;
+    GetWiFiMACReq get_wifi_mac = 25;
+    SetWiFiSSIDAndPasswordReq set_wifi_ssid_and_password = 26;
+    GetWiFiRecordsReq get_wifi_records = 27;
+    OperateWiFiRecordReq operate_wifi_record = 28;
+    GetWiFiStateMachineReq get_wifi_state_machine = 29;
+    SetWiFiStateMachineReq set_wifi_state_machine = 30;
+
+    SetChargingStrategyReq set_charging_strategy = 40;
+    GetChargingStatusReq get_charging_status = 41;
+    GetPowerHistoricalStatsReq get_power_historical_stats = 42;
+    SetPortPriorityReq set_port_priority = 43;
+    GetPortPriorityReq get_port_priority = 44;
+    GetChargingStrategyReq get_charging_strategy = 45;
+    GetPortPDStatusReq get_port_pd_status = 46;
+    GetAllPowerStatisticsReq get_all_power_statistics = 47;
+    TurnOnPortReq turn_on_port = 48;
+    TurnOffPortReq turn_off_port = 49;
+    SetStaticAllocatorReq set_static_allocator = 50;
+    GetStaticAllocatorReq get_static_allocator = 51;
+    SetPortConfigReq set_port_config = 52;
+    GetPortConfigReq get_port_config = 53;
+    SetPortCompatibilitySettingsReq set_port_compatibility_settings = 54;
+    GetPortCompatibilitySettingsReq get_port_compatibility_settings = 55;
+    SetTemperatureModeReq set_temperature_mode = 56;
+    SetTemporaryAllocatorReq set_temporary_allocator = 57;
+    SubscribePDPcapStreamingReq subscribe_pdpcap_streaming = 58;
+    SetPortTypeReq set_port_type = 59;
+    SetCustomPdoVoltageReq set_custom_pdo_voltage = 60;
+    SetCableCompensationReq set_cable_compensation = 61;
+    GetCableCompensationReq get_cable_compensation = 62;
+
+    SetDisplayIntensityReq set_display_intensity = 80;
+    SetDisplayModeReq set_display_mode = 81;
+    GetDisplayIntensityReq get_display_intensity = 82;
+    GetDisplayModeReq get_display_mode = 83;
+    SetDisplayFlipReq set_display_flip = 84;
+    GetDisplayFlipReq get_display_flip = 85;
+    SetDisplayConfigReq set_display_config = 86;
+    GetDisplayRotationReq get_display_rotation = 87;
+    SetDisplayRotationReq set_display_rotation = 88;
+    SetDisplaySetupReq set_display_setup = 89;
+    GetDisplaySetupReq get_display_setup = 90;
+
+    StartTelemetryStreamReq start_telemetry_stream = 100;
+    StopTelemetryStreamReq stop_telemetry_stream = 101;
+
+    SetBleStateReq set_ble_state = 110;
+    StartOTAReq start_ota = 111;
+    StartProgrammerReq start_programmer = 112;
+    ClearFactoryDMFlagReq clear_factory_dm_flag = 113;
+  }
+}
+
+message CommandResponse {
+  uint32 id = 1;
+  CommandStatus status = 2;
+  oneof payload {
+    EnableReleaseModeResp enable_release_mode = 12;
+
+    RebootDeviceResp reboot_device = 20;
+    ResetDeviceResp reset_device = 21;
+    GetDevicePSNResp get_device_psn = 22;
+    GetAPVersionResp get_ap_version = 23;
+    SetDevicePowerStateResp set_power_state = 24;
+    GetDevicePowerStateResp get_power_state = 25;
+    GetDeviceInfoResp get_device_info = 26;
+    GetHardwareRevisionResp get_hardware_revision = 27;
+
+    ScanWiFiResp scan_wifi = 30;
+    SetWiFiSSIDResp set_wifi_ssid = 31;
+    SetWiFiPasswordResp set_wifi_password = 32;
+    ResetWiFiResp reset_wifi = 33;
+    GetWiFiStatusResp get_wifi_status = 34;
+    GetWiFiMACResp get_wifi_mac = 35;
+    SetWiFiSSIDAndPasswordResp set_wifi_ssid_and_password = 36;
+    GetWiFiRecordsResp get_wifi_records = 37;
+    OperateWiFiRecordResp operate_wifi_record = 38;
+    GetWiFiStateMachineResp get_wifi_state_machine = 39;
+    SetWiFiStateMachineResp set_wifi_state_machine = 40;
+
+    SetChargingStrategyResp set_charging_strategy = 50;
+    GetChargingStatusResp get_charging_status = 51;
+    GetPowerHistoricalStatsResp get_power_historical_stats = 52;
+    SetPortPriorityResp set_port_priority = 53;
+    GetPortPriorityResp get_port_priority = 54;
+    GetChargingStrategyResp get_charging_strategy = 55;
+    GetPortPDStatusResp get_port_pd_status = 56;
+    GetAllPowerStatisticsResp get_all_power_statistics = 57;
+    TurnOnPortResp turn_on_port = 58;
+    TurnOffPortResp turn_off_port = 59;
+    SetStaticAllocatorResp set_static_allocator = 60;
+    GetStaticAllocatorResp get_static_allocator = 61;
+    SetPortConfigResp set_port_config = 62;
+    GetPortConfigResp get_port_config = 63;
+    SetPortCompatibilitySettingsResp set_port_compatibility_settings = 64;
+    GetPortCompatibilitySettingsResp get_port_compatibility_settings = 65;
+    SetTemperatureModeResp set_temperature_mode = 66;
+    SetTemporaryAllocatorResp set_temporary_allocator = 67;
+    SubscribePDPcapStreamingResp subscribe_pdpcap_streaming = 70;
+    SetPortTypeResp set_port_type = 71;
+    SetCustomPdoVoltageResp set_custom_pdo_voltage = 72;
+    SetCableCompensationResp set_cable_compensation = 73;
+    GetCableCompensationResp get_cable_compensation = 74;
+
+    SetDisplayIntensityResp set_display_intensity = 90;
+    SetDisplayModeResp set_display_mode = 91;
+    GetDisplayIntensityResp get_display_intensity = 92;
+    GetDisplayModeResp get_display_mode = 93;
+    SetDisplayFlipResp set_display_flip = 94;
+    GetDisplayFlipResp get_display_flip = 95;
+    SetDisplayConfigResp set_display_config = 96;
+    GetDisplayRotationResp get_display_rotation = 97;
+    SetDisplayRotationResp set_display_rotation = 98;
+    SetDisplaySetupResp set_display_setup = 99;
+    GetDisplaySetupResp get_display_setup = 100;
+
+    StartTelemetryStreamResp start_telemetry_stream = 110;
+    StopTelemetryStreamResp stop_telemetry_stream = 111;
+    StreamPortStatus stream_port_status = 112;
+    StreamDeviceStatus stream_device_status = 113;
+    StreamPortPDStatus stream_port_pd_status = 114;
+    StreamProgrammerStatus stream_programmer_status = 115;
+
+    SetBleStateResp set_ble_state = 120;
+    StartOTAResp start_ota = 121;
+    StartProgrammerResp start_programmer = 122;
+    ClearFactoryDMFlagResp clear_factory_dm_flag = 123;
+  }
+}
+
+message EnableReleaseModeReq {}
+message EnableReleaseModeResp {}
+
+message GetHardwareRevisionReq {}
+message GetHardwareRevisionResp {
+  string revision = 1;
+}
+
+message RebootDeviceReq {}
+message RebootDeviceResp {}
+
+message ResetDeviceReq {
+  // NVS namespaces to keep after reset
+  optional bool keep_wifi_nvs = 1;
+  optional bool keep_mqtt_nvs = 2;
+  optional bool keep_ble_nvs = 3;
+  optional bool keep_display_nvs = 4;
+  optional bool keep_power_nvs = 5;
+  optional bool keep_system_nvs = 6;
+  optional bool keep_license_nvs = 7;
+  optional bool keep_syslog_nvs = 8;
+  optional bool keep_fpga_nvs = 9;
+  optional bool keep_ota_nvs = 10;
+  // Reset operations
+  optional bool prevent_reboot = 31;
+  optional bool reset_ports = 32;
+  optional bool reset_power_strategy = 33;
+  optional bool reset_wifi = 34;
+  optional bool reset_display = 35;
+  optional bool reset_fc_protocol = 36;
+  optional bool reset_temperature_mode = 37;
+  optional bool reset_cable_compensation = 38;
+}
+message ResetDeviceResp {}
+
+message GetDevicePSNReq {}
+message GetDevicePSNResp {
+  string psn = 1;
+}
+
+message GetAPVersionReq {}
+message GetAPVersionResp {
+  Version version = 1;
+}
+
+message SetDevicePowerStateReq {
+  PowerState state = 1;
+}
+message SetDevicePowerStateResp {}
+
+message GetDevicePowerStateReq {}
+message GetDevicePowerStateResp {
+  PowerState state = 1;
+}
+
+message ScanWiFiReq {}
+
+message ScanWiFiResp {
+  repeated SSIDInfo ssid_list = 1;
+}
+
+message SetWiFiSSIDReq {
+  string ssid = 1;
+}
+message SetWiFiSSIDResp {}
+
+message SetWiFiPasswordReq {
+  string password = 1;
+}
+message SetWiFiPasswordResp {}
+
+message ResetWiFiReq {}
+message ResetWiFiResp {}
+
+message GetWiFiStatusReq {}
+message GetWiFiStatusResp {
+  string bssid = 1;
+  sint32 rssi = 2;
+  uint32 channel = 3;
+  uint32 protocol = 4;
+  string ssid = 5;
+}
+
+message GetWiFiMACReq {}
+message GetWiFiMACResp {
+  string mac = 1;
+}
+
+message SetWiFiSSIDAndPasswordReq {
+  string ssid = 1;
+  string password = 2;
+  WiFiAuthMode auth_mode = 3;
+}
+message SetWiFiSSIDAndPasswordResp {}
+
+message GetWiFiRecordsReq {}
+message GetWiFiRecordsResp {
+  repeated WiFiRecord records = 1;
+}
+
+message OperateWiFiRecordReq {
+  ManageAction action = 1;
+  string ssid = 2;
+  string password = 3;
+  WiFiAuthMode auth_mode = 4;
+}
+message OperateWiFiRecordResp {}
+
+message GetWiFiStateMachineReq {}
+message GetWiFiStateMachineResp {
+  WiFiState state = 1;
+}
+
+message SetWiFiStateMachineReq {
+  WiFiState state = 1;
+}
+message SetWiFiStateMachineResp {}
+
+message SetChargingStrategyReq {
+  ChargingStrategy charging_strategy = 1;
+}
+message SetChargingStrategyResp {}
+
+message GetChargingStatusReq {}
+message GetChargingStatusResp {
+  uint32 status = 1; // 二进制 00011111
+}
+
+message GetPowerHistoricalStatsReq {
+  uint32 port = 1;
+  uint32 offset = 2;
+}
+message GetPowerHistoricalStatsResp {
+  uint32 offset = 1;
+  repeated PowerHistoricalStats data = 2;
+}
+
+message SetPortPriorityReq {
+  repeated uint32 priority = 1;
+}
+message SetPortPriorityResp {}
+
+message GetPortPriorityReq {}
+message GetPortPriorityResp {
+  repeated uint32 priority = 1;
+}
+
+message GetChargingStrategyReq {}
+message GetChargingStrategyResp {
+  ChargingStrategy charging_strategy = 1;
+}
+
+message GetPortPDStatusReq {
+  uint32 port = 1;
+}
+message GetPortPDStatusResp {
+  ClientPDStatus pd_status = 1;
+}
+
+message GetAllPowerStatisticsReq {}
+message GetAllPowerStatisticsResp {
+  repeated PowerStatistics stats = 1;
+}
+
+message TurnOnPortReq {
+  repeated uint32 ports = 1;
+}
+message TurnOnPortResp {}
+
+message TurnOffPortReq {
+  repeated uint32 ports = 1;
+}
+message TurnOffPortResp {}
+
+message SetStaticAllocatorReq {
+  uint32 identifier = 1;
+  PowerAllocationTable table = 2;
+}
+message SetStaticAllocatorResp {
+  uint32 identifier = 1;
+}
+
+message GetStaticAllocatorReq {}
+message GetStaticAllocatorResp {
+  uint32 identifier = 1;
+  uint32 version = 2;
+}
+
+message SetPortConfigReq {
+  uint32 ports = 1;
+  repeated PortConfig configs = 2;
+}
+message SetPortConfigResp {}
+
+message GetPortConfigReq {
+  uint32 version = 1;
+}
+message GetPortConfigResp {
+  repeated PortConfig configs = 1;
+}
+
+message SetPortCompatibilitySettingsReq {
+  CompatibilitySettings settings = 1;
+}
+message SetPortCompatibilitySettingsResp {}
+
+message GetPortCompatibilitySettingsReq {}
+message GetPortCompatibilitySettingsResp {
+  CompatibilitySettings settings = 1;
+}
+
+message SetTemperatureModeReq {
+  TemperatureMode mode = 1;
+}
+message SetTemperatureModeResp {}
+
+message SetTemporaryAllocatorReq {
+  repeated uint32 power_allocation = 1;
+}
+message SetTemporaryAllocatorResp {}
+
+message SubscribePDPcapStreamingReq {
+  uint32 port = 1;
+  bool subscribe = 2;
+}
+message SubscribePDPcapStreamingResp {}
+
+message SetPortTypeReq {
+  uint32 port = 1;
+  PortType port_type = 2;
+}
+message SetPortTypeResp {}
+
+message SetCustomPdoVoltageReq {
+  uint32 port = 1;
+  uint32 voltage_mv = 2;
+}
+message SetCustomPdoVoltageResp {}
+
+message SetCableCompensationReq {
+    uint32 port_mask = 1;
+    bool disable = 2;
+    CableCompensation resistance = 3;
+    FixedVoltageOffset voltage_offset = 4;
+}
+message SetCableCompensationResp {}
+
+message GetCableCompensationReq {
+    uint32 port = 1;
+}
+message GetCableCompensationResp {
+    bool enable = 1;
+    CableCompensation resistance = 2;
+    FixedVoltageOffset voltage_offset = 3;
+}
+
+message SetDisplayIntensityReq {
+  uint32 intensity = 1;
+}
+message SetDisplayIntensityResp {}
+
+message SetDisplayModeReq {
+  DisplayMode mode = 1;
+}
+message SetDisplayModeResp {}
+
+message GetDisplayIntensityReq {}
+message GetDisplayIntensityResp {
+  uint32 intensity = 1;
+}
+
+message GetDisplayModeReq {}
+message GetDisplayModeResp {
+  DisplayMode mode = 1;
+}
+
+message SetDisplayFlipReq {
+  DisplayFlip flip = 1;
+}
+message SetDisplayFlipResp {}
+
+message GetDisplayFlipReq {}
+message GetDisplayFlipResp {
+  DisplayFlip flip = 1;
+}
+
+message SetDisplayConfigReq {
+  DisplayConfiguration config = 1;
+}
+message SetDisplayConfigResp {}
+
+message GetDisplayRotationReq {}
+message GetDisplayRotationResp {
+  DisplayRotation rotation = 1;
+}
+
+message SetDisplayRotationReq {
+  DisplayRotation rotation = 1;
+}
+message SetDisplayRotationResp {}
+
+message SetDisplaySetupReq {
+  DisplaySetup setup = 1;
+}
+message SetDisplaySetupResp {}
+
+message GetDisplaySetupReq {}
+message GetDisplaySetupResp {
+  DisplaySetup setup = 1;
+}
+
+message StartTelemetryStreamReq {}
+message StartTelemetryStreamResp {}
+
+message StopTelemetryStreamReq {}
+message StopTelemetryStreamResp {}
+
+message GetDeviceInfoReq {}
+message GetDeviceInfoResp {
+  DeviceInfo info = 1;
+}
+
+message SetBleStateReq {
+  bool enable = 1;
+}
+message SetBleStateResp {}
+
+message StartOTAReq {
+  Version sw3566_version = 1;
+  Version fpga_version = 2;
+  Version esp32_version = 3;
+  bool force = 4;
+}
+
+message StartOTAResp {}
+
+message StreamPortStatus {
+  uint32 port_status_map = 1;
+  repeated PortStatusData ports = 2;
+}
+
+message StreamPortPDStatus {
+  uint32 port = 1;
+  ClientPDStatus pd_status = 2;
+}
+
+message StreamDeviceStatus {
+  uint32 allocator = 1;
+  DisplayConfiguration display_config = 2;
+  uint32 device_uptime = 3; // second
+  FeatureFlag feature_flag = 4;
+  uint32 charging_minutes = 5;
+  uint32 power_allocator_param = 6;
+  TemperatureMode temperature_mode = 7;
+  bool programmer_mode = 8;
+}
+
+message StartProgrammerReq {
+  Version version = 1;
+  string product_family = 2;
+}
+
+message StartProgrammerResp {}
+
+message StreamProgrammerStatus {
+  bool start = 1;
+  bool success = 2;
+  ProgrammerState error_reason = 3;
+}
+
+message ClearFactoryDMFlagReq {}
+
+message ClearFactoryDMFlagResp {}

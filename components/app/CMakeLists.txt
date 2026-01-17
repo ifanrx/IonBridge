@@ -5,6 +5,7 @@ idf_component_register(
   INCLUDE_DIRS
   "include"
   REQUIRES
+  pb
   service
   PRIV_REQUIRES
   controller

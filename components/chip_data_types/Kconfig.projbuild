@@ -1,0 +1,116 @@
+menu "FPGA ADC Configuration"
+comment "Only available with FPGA hardware"
+
+config FPGA_ADC_CFGS_COUNT
+    int "Number of FPGA ADC configurations"
+    default 1
+    range 1 4
+    help
+        This option specifies the number of FPGA ADC configurations that can be defined.
+        Each configuration can have its own settings for ADC channels and other parameters.
+
+config FPGA_ADC_CFG_DEFAULT
+   int "Default FPGA ADC Configuration"
+   default 0
+   range 0 2
+   help
+       This option specifies the default FPGA ADC configuration to use.
+       It should match one of the defined configurations (0, 1, or 2).
+
+config FPGA_ADC_CFG0_THRESHOLD_LOW
+    int "FPGA ADC Configuration 0 Threshold Low"
+    depends on FPGA_ADC_CFGS_COUNT >= 1
+    default 70
+    range 0 255
+    help
+        ADC Threshold Low for FPGA Configuration 0.
+
+config FPGA_ADC_CFG0_THRESHOLD_HIGH
+    int "FPGA ADC Configuration 0 Threshold High"
+    depends on FPGA_ADC_CFGS_COUNT >= 1
+    default 75
+    range 0 255
+    help
+        ADC Threshold High for FPGA Configuration 0.
+
+config FPGA_ADC_CFG0_ACTION_DEADZONE
+    int "FPGA ADC Configuration 0 Action Deadzone"
+    depends on FPGA_ADC_CFGS_COUNT >= 1
+    default 128
+    range 0 255
+    help
+        Action Deadzone for FPGA Configuration 0.
+
+config FPGA_ADC_CFG1_THRESHOLD_LOW
+    int "FPGA ADC Configuration 1 Threshold Low"
+    depends on FPGA_ADC_CFGS_COUNT >= 2
+    default 70
+    range 0 255
+    help
+        ADC Threshold Low for FPGA Configuration 1.
+
+config FPGA_ADC_CFG1_THRESHOLD_HIGH
+    int "FPGA ADC Configuration 1 Threshold High"
+    depends on FPGA_ADC_CFGS_COUNT >= 2
+    default 75
+    range 0 255
+    help
+        ADC Threshold High for FPGA Configuration 1.
+
+config FPGA_ADC_CFG1_ACTION_DEADZONE
+    int "FPGA ADC Configuration 1 Action Deadzone"
+    depends on FPGA_ADC_CFGS_COUNT >= 2
+    default 128
+    range 0 255
+    help
+        Action Deadzone for FPGA Configuration 1.
+
+config FPGA_ADC_CFG2_THRESHOLD_LOW
+    int "FPGA ADC Configuration 2 Threshold Low"
+    depends on FPGA_ADC_CFGS_COUNT >= 3
+    default 70
+    range 0 255
+    help
+        ADC Threshold Low for FPGA Configuration 2.
+
+config FPGA_ADC_CFG2_THRESHOLD_HIGH
+    int "FPGA ADC Configuration 2 Threshold High"
+    depends on FPGA_ADC_CFGS_COUNT >= 3
+    default 75
+    range 0 255
+    help
+        ADC Threshold High for FPGA Configuration 2.
+
+config FPGA_ADC_CFG2_ACTION_DEADZONE
+    int "FPGA ADC Configuration 2 Action Deadzone"
+    depends on FPGA_ADC_CFGS_COUNT >= 3
+    default 128
+    range 0 255
+    help
+        Action Deadzone for FPGA Configuration 2.
+
+config FPGA_ADC_CFG3_THRESHOLD_LOW
+    int "FPGA ADC Configuration 3 Threshold Low"
+    depends on FPGA_ADC_CFGS_COUNT >= 4
+    default 70
+    range 0 255
+    help
+        ADC Threshold Low for FPGA Configuration 3.
+
+config FPGA_ADC_CFG3_THRESHOLD_HIGH
+    int "FPGA ADC Configuration 3 Threshold High"
+    depends on FPGA_ADC_CFGS_COUNT >= 4
+    default 75
+    range 0 255
+    help
+        ADC Threshold High for FPGA Configuration 3.
+
+config FPGA_ADC_CFG3_ACTION_DEADZONE
+    int "FPGA ADC Configuration 3 Action Deadzone"
+    depends on FPGA_ADC_CFGS_COUNT >= 4
+    default 128
+    range 0 255
+    help
+        Action Deadzone for FPGA Configuration 3.
+
+endmenu

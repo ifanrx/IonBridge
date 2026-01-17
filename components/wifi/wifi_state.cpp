@@ -23,6 +23,8 @@
 #include "ionbridge.h"
 #include "machine_info.h"
 #include "mqtt_app.h"
+#include "nvs_key.h"
+#include "nvs_namespace.h"
 #include "portmacro.h"
 #include "sdkconfig.h"
 #include "utils.h"
@@ -57,10 +59,6 @@
 #define MQTT_APP_URI CONFIG_MQTT_APP_URI
 #define MQTT_APP_HOST CONFIG_MQTT_APP_HOSTNAME
 #define FALLBACK_IP CONFIG_FALLBACK_IP
-
-#ifdef CONFIG_ENABLE_REPORT_SYSLOG
-#define SYSLOG_HOST CONFIG_SYSLOG_HOST
-#endif
 
 #if CONFIG_ESP_WPA3_SAE_PWE_HUNT_AND_PECK
 #define WIFI_SAE_MODE WPA3_SAE_PWE_HUNT_AND_PECK
@@ -187,6 +185,13 @@ void WiFiStateContext::SetWiFi(const char *ssid, const char *passwd) {
           sizeof(wifi_config_->sta.ssid));
   strlcpy(reinterpret_cast<char *>(wifi_config_->sta.password), passwd,
           sizeof(wifi_config_->sta.password));
+  if (strlen(passwd) > 0) {
+    wifi_config_->sta.threshold.authmode = WIFI_AUTH_WPA_WPA2_PSK;
+    wifi_config_->sta.owe_enabled = false;
+  } else {
+    wifi_config_->sta.threshold.authmode = WIFI_AUTH_OPEN;
+    wifi_config_->sta.owe_enabled = true;
+  }
 }
 
 void WiFiStateContext::ResetWiFiSSID() {
@@ -237,11 +242,9 @@ void WiFiScanAndConnectState::Handle(WiFiStateContext *ctx,
     wifi_controller.SetState(WiFiStateType::WAITING_FOR_NEXT);
     return;
   }
+
   WiFiManager &wifi_manager = WiFiManager::GetInstance();
   switch (event) {
-    case WiFiEventType::SCAN_DONE: {
-      break;
-    }
     case WiFiEventType::SWITCHING:
       wifi_controller.SetState(WiFiStateType::CONNECTING);
       return;
@@ -250,12 +253,24 @@ void WiFiScanAndConnectState::Handle(WiFiStateContext *ctx,
                WiFiEventTypeToString(event));
       return;
   }
+
   char ssid[WIFI_SSID_MAXIMUM] = {};
   char passwd[WIFI_PASSWD_MAXIMUM] = {};
 
   if (!wifi_manager.GetWiFi(ssid, passwd)) {
     wifi_controller.SetState(WiFiStateType::WAITING_FOR_NEXT);
     return;
+  }
+
+  // Show factory DM when factory SSID prefix detected AND factory flag is set
+  if (wifi_manager.IsFactoryWiFiFound()) {
+    std::string show_dm_flag;
+    esp_err_t err = nvs_namespace::protected_data::DEVICE_DATA.Get(
+        nvs_keys::DEVICE_DATA_MATRIX_FLAG, show_dm_flag);
+    if (err == ESP_OK && !show_dm_flag.empty()) {
+      DisplayManager::GetInstance().SetNextAnimation(AnimationType::DATA_MATRIX,
+                                                     true);
+    }
   }
 
   ctx->SetWiFi(ssid, passwd);
@@ -288,8 +303,8 @@ esp_err_t start_connect_wifi(wifi_config_t &wifi_config) {
              sta_config->ssid, sta_config->threshold.authmode);
   }
   ESP_RETURN_ON_ERROR(esp_wifi_connect(), TAG, "esp_wifi_connect");
-  DisplayManager::GetInstance().SetAnimation(AnimationType::WIFI_CONNECTING,
-                                             true);
+  DisplayManager::GetInstance().SetNextAnimation(AnimationType::WIFI_CONNECTING,
+                                                 true);
   return ESP_OK;
 }
 
@@ -355,10 +370,7 @@ void WiFiConnectingState::Handle(WiFiStateContext *ctx, WiFiEventType event) {
   }
 }
 
-void WiFiConnectingState::Exiting(WiFiStateContext *ctx) {
-  DisplayManager::GetInstance().SetAnimation(AnimationType::IDLE_ANIMATION,
-                                             true);
-}
+void WiFiConnectingState::Exiting(WiFiStateContext *ctx) {}
 
 void WiFiConnectedState::Entering(WiFiStateContext *ctx) {
   ctx->connection_start_time_ = 0;
@@ -372,9 +384,18 @@ void WiFiConnectedState::Handle(WiFiStateContext *ctx, WiFiEventType event) {
     case WiFiEventType::SWITCHING:
       wifi_controller.SetState(WiFiStateType::CONNECTING);
       return;
-    case WiFiEventType::CHECKING_CONN:
+    case WiFiEventType::CHECKING_CONN: {
+#ifdef CONFIG_ENABLE_WIFI_LAB_TEST
+      const char *ssid = ctx->GetWiFiSSID();
+      if (strcmp(ssid, CONFIG_WIFI_LAB_TEST_SSID) == 0) {
+        ESP_LOGI(TAG, "Lab test SSID detected, skipping connectivity check");
+        wifi_controller.SetState(WiFiStateType::IDLE);
+        return;
+      }
+#endif
       wifi_controller.SetState(WiFiStateType::CHECKING_CONN);
       return;
+    }
     case WiFiEventType::DISCONNECTED:
       wifi_controller.SetState(WiFiStateType::DISCONNECTED);
       return;
@@ -392,6 +413,7 @@ void WiFiConnectedState::Handle(WiFiStateContext *ctx, WiFiEventType event) {
 }
 
 void WiFiCheckingConnState::Entering(WiFiStateContext *ctx) {
+  // Animation continues until MQTT result is determined
   StartCheckConnTask();
 }
 
@@ -455,12 +477,32 @@ void WiFiCheckingConnState::ExecuteCheckConnTask() {
 }
 
 void WiFiIdleState::Entering(WiFiStateContext *ctx) {
+  should_start_mqtt_ = true;
   temporary_exiting_ = false;
   client_started_ = false;
-  if (DeviceController::GetInstance().is_normally_booted() &&
+
+#ifdef CONFIG_ENABLE_WIFI_LAB_TEST
+  should_start_mqtt_ =
+      strcmp(ctx->GetWiFiSSID(), CONFIG_WIFI_LAB_TEST_SSID) != 0;
+#endif
+
+  if (should_start_mqtt_ &&
+      DeviceController::GetInstance().is_normally_booted() &&
       MQTTClient::Initialize()) {
     client_started_ = MQTTClient::GetInstance()->Start();
+
+    // Start web server if using custom broker (regardless of connection status)
+    MQTTClient *mqtt = MQTTClient::GetInstance();
+    if (mqtt && mqtt->IsCustomBroker()) {
+      ESP_LOGI(TAG,
+               "Custom broker detected, starting web server for configuration");
+#ifdef ENABLE_WEB_SERVER
+      ESP_ERROR_COMPLAIN(start_web_server(),
+                         "Failed to start web server for custom broker");
+#endif
+    }
   }
+
   ctx->SetReconnect(false, false);
   ctx->SetSwitchingWiFi(false);
   next_log_at_ = 0;
@@ -482,7 +524,7 @@ void WiFiIdleState::Handle(WiFiStateContext *ctx, WiFiEventType event) {
     case WiFiEventType::SCANNING:
       temporary_exiting_ = true;
       wifi_controller.SetState(WiFiStateType::SCANNING);
-      break;
+      return;
     case WiFiEventType::SWITCHING:
       wifi_controller.SetState(WiFiStateType::CONNECTING);
       return;
@@ -510,11 +552,17 @@ void WiFiIdleState::Handle(WiFiStateContext *ctx, WiFiEventType event) {
                WiFiEventTypeToString(event));
       break;
   }
+
   int64_t ts = esp_timer_get_time();
   if (ts > next_log_at_) {
     LogRSSI();
     next_log_at_ = ts + WIFI_RSSI_LOG_TIMER_INTERVAL * 1e6;
   }
+
+  if (!should_start_mqtt_) {
+    return;
+  }
+
   if (!client_started_ &&
       DeviceController::GetInstance().is_normally_booted() &&
       MQTTClient::Initialize()) {
@@ -523,8 +571,19 @@ void WiFiIdleState::Handle(WiFiStateContext *ctx, WiFiEventType event) {
   }
 
   if (MQTTClient::AttemptReconnection() == ESP_FAIL) {
-    ESP_LOGW(TAG, "Current Wi-Fi connection is unstable, finding next Wi-Fi");
-    wifi_controller.SetState(WiFiStateType::WAITING_FOR_NEXT);
+    // Check if we're using a custom broker before switching WiFi
+    MQTTClient *mqtt = MQTTClient::GetInstance();
+    if (!mqtt || !mqtt->IsCustomBroker()) {
+      ESP_LOGW(TAG, "Current Wi-Fi connection is unstable, finding next Wi-Fi");
+      // Switch state first (triggers StopAnimation), then show failed animation
+      wifi_controller.SetState(WiFiStateType::WAITING_FOR_NEXT);
+      DisplayManager::GetInstance().SetNextAnimation(AnimationType::IDLE,
+                                                     false);
+    } else {
+      ESP_LOGW(TAG,
+               "Custom broker connection failed, keeping current WiFi for "
+               "reconfiguration");
+    }
   }
 }
 
@@ -566,6 +625,7 @@ void WiFiDisconnectedState::Handle(WiFiStateContext *ctx, WiFiEventType event) {
     wifi_controller.SetState(WiFiStateType::CONNECTION_ABORT);
   } else if (ctx->IsReconnectNextWiFi()) {
     wifi_controller.SetState(WiFiStateType::WAITING_FOR_NEXT);
+    DisplayManager::GetInstance().SetNextAnimation(AnimationType::IDLE, false);
   } else {
     wifi_controller.SetState(WiFiStateType::RECONNECTING);
   }
@@ -605,6 +665,8 @@ void WiFiReconnectingState::Handle(WiFiStateContext *ctx, WiFiEventType event) {
       // auth_fail
       if (ctx->IsSkipReconnect()) {
         wifi_controller.SetState(WiFiStateType::WAITING_FOR_NEXT);
+        DisplayManager::GetInstance().SetNextAnimation(AnimationType::IDLE,
+                                                       false);
         return;
       }
       connecting_ = false;
@@ -612,6 +674,8 @@ void WiFiReconnectingState::Handle(WiFiStateContext *ctx, WiFiEventType event) {
       if (retry_cnt_ > WIFI_STA_MAXIMUM_RETRY) {
         ESP_LOGW(TAG, "Maximum retry limit reached");
         wifi_controller.SetState(WiFiStateType::WAITING_FOR_NEXT);
+        DisplayManager::GetInstance().SetNextAnimation(AnimationType::IDLE,
+                                                       false);
         return;
       }
       delay_ms_ = MIN(delay_ms_ * 2, WIFI_EVT_MAX_DELAY_MS_);
@@ -632,10 +696,7 @@ void WiFiReconnectingState::Handle(WiFiStateContext *ctx, WiFiEventType event) {
   }
 }
 
-void WiFiReconnectingState::Exiting(WiFiStateContext *ctx) {
-  DisplayManager::GetInstance().SetAnimation(AnimationType::IDLE_ANIMATION,
-                                             true);
-}
+void WiFiReconnectingState::Exiting(WiFiStateContext *ctx) {}
 
 void WiFiWaitingForNextState::UpdateConnectAt() {
   uint32_t interval_ms = WIFI_RECONNECT_LOOP_INTERVAL_MS;
@@ -647,11 +708,14 @@ void WiFiWaitingForNextState::UpdateConnectAt() {
 }
 
 void WiFiWaitingForNextState::Entering(WiFiStateContext *ctx) {
+  // Stop any connecting animation
+  DisplayManager::GetInstance().StopAnimation(AnimationType::WIFI_CONNECTING);
   ESP_ERROR_COMPLAIN(
-      esp_wifi_disconnect(),
+      wifi_disconnect(true),
       "Failed to disconnect from WiFi before attempting the next connection");
   ble_adv_start();
   ctx->Reset();
+
   WiFiManager &wifi_manager = WiFiManager::GetInstance();
   char ssid[WIFI_SSID_MAXIMUM] = {};
   char passwd[WIFI_PASSWD_MAXIMUM] = {};
@@ -661,6 +725,7 @@ void WiFiWaitingForNextState::Entering(WiFiStateContext *ctx) {
     ctx->SetWiFi(ssid, passwd);
     ssid_available_ = true;
   }
+
   UpdateConnectAt();
 }
 
@@ -723,8 +788,9 @@ void WiFiScanningState::Handle(WiFiStateContext *ctx, WiFiEventType event) {
 }
 
 void WiFiConnectionAbortState::Entering(WiFiStateContext *ctx) {
-  ble_adv_start();
-  disconnected_ = esp_wifi_disconnect() == ESP_OK;
+  // Let animation layer decide what to show based on device status
+  DisplayManager::GetInstance().SetNextAnimation(AnimationType::IDLE, false);
+  disconnect_called_ = esp_wifi_disconnect() == ESP_OK;
   until_at_ = esp_timer_get_time() + WIFI_ABORT_WAIT_MS * 1e3;
 }
 
@@ -737,19 +803,21 @@ void WiFiConnectionAbortState::Handle(WiFiStateContext *ctx,
     case WiFiEventType::SWITCHING:
       wifi_controller.SetState(WiFiStateType::CONNECTING);
       return;
+    case WiFiEventType::DISCONNECTED:
+      ble_adv_start();
+      return;
     default:
       ESP_LOGD(TAG, "%s ignore %s", ToString().c_str(),
                WiFiEventTypeToString(event));
       break;
   }
-  if (disconnected_ && esp_timer_get_time() > until_at_) {
-    if (strlen(ctx->GetWiFiSSID()) == 0) {
-      wifi_controller.SetState(WiFiStateType::WAITING_FOR_NEXT);
-    } else {
-      wifi_controller.SetState(WiFiStateType::RECONNECTING);
-    }
-  } else {
-    disconnected_ = esp_wifi_disconnect() == ESP_OK;
+
+  if (!disconnect_called_) {
+    disconnect_called_ = esp_wifi_disconnect() == ESP_OK;
+  } else if (esp_timer_get_time() > until_at_) {
+    wifi_controller.SetState(strlen(ctx->GetWiFiSSID()) == 0
+                                 ? WiFiStateType::WAITING_FOR_NEXT
+                                 : WiFiStateType::RECONNECTING);
   }
 }
 
@@ -790,10 +858,10 @@ static const char *connectivity_check_endpoints[] = {
 };
 
 static bool check_connectivity() {
-  esp_http_client_config_t config = {
-      .method = HTTP_METHOD_GET,
-      .timeout_ms = 3000,
-  };
+  esp_http_client_config_t config = {};
+  config.method = HTTP_METHOD_GET;
+  config.timeout_ms = 3000;
+
   const char **urls;
   if (MachineInfo::GetInstance().IsInChina()) {
     urls = connectivity_check_endpoints_cn;
@@ -832,6 +900,11 @@ void check_network_connectivity(void *arg) {
   WiFiCheckingConnState::CheckConnState state;
   network_accessible = false;
   while (retry_count++ < 2 && !network_accessible) {
+    // 调试信息
+    ESP_LOGW(TAG,
+             "ConnectivityCheck: retry %d, waiting for task notification "
+             "(network_accessible=%d)",
+             retry_count, network_accessible);
     if (xTaskNotifyWait(0, 0, (uint32_t *)&state, portMAX_DELAY) != pdTRUE) {
       ESP_LOGW(TAG, "Failed to notify task: CHECKING_CONN");
       continue;
@@ -849,7 +922,7 @@ void check_network_connectivity(void *arg) {
     }
 
     // Check if MQTT broker can be resolved
-    if (!wifi_controller.ResolveAddress(MQTT_APP_HOST)) {
+    if (!resolve_hostname(MQTT_APP_HOST)) {
       ESP_LOGE(TAG, "Failed to resolve MQTT broker: %s", MQTT_APP_HOST);
       WiFiManager::GetInstance().AddDNSResolutionFailure();
       MQTTClient *mqtt = MQTTClient::GetInstance();
@@ -858,13 +931,11 @@ void check_network_connectivity(void *arg) {
       }
     }
 
-#ifdef SYSLOG_HOST
     // Check if syslog server can be resolved
-    if (!wifi_controller.ResolveAddress(SYSLOG_HOST)) {
-      ESP_LOGE(TAG, "Failed to resolve SysLog server: %s", SYSLOG_HOST);
+    if (!resolve_hostname(CONFIG_SYSLOG_HOST)) {
+      ESP_LOGE(TAG, "Failed to resolve SysLog server: %s", CONFIG_SYSLOG_HOST);
       WiFiManager::GetInstance().AddDNSResolutionFailure();
     }
-#endif
 
     // All checks passed
     network_accessible = true;

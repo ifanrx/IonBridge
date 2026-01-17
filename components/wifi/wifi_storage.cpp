@@ -13,7 +13,7 @@
 #include "esp_log.h"
 #include "ionbridge.h"
 #include "nvs.h"
-#include "nvs_default.h"
+#include "nvs_key.h"
 #include "nvs_namespace.h"
 #include "sdkconfig.h"
 
@@ -23,10 +23,12 @@
 
 static const char* TAG = "WiFiStorage";
 
+using nvs_namespace::user_data::WIFI;
+using nvs_wrapper::Key;
+
 WiFiStorage::WiFiStorage() {
   hash_.fill(0);
-  size_t size = hash_.size() * sizeof(uint32_t);
-  ESP_ERROR_COMPLAIN(WifiNVSGet(hash_.data(), &size, NVSKey::WIFI_HASH),
+  ESP_ERROR_COMPLAIN(WIFI.Get(nvs_keys::WIFI_HASH, hash_),
                      "Failed to obtain Wi-Fi hash");
 }
 
@@ -37,18 +39,16 @@ esp_err_t WiFiStorage::Create(const WiFiEntry& entry) {
     return ESP_ERR_NOT_FOUND;
   }
 
-  NVSKey key = static_cast<NVSKey>(static_cast<int>(NVSKey::WIFI_CREDENTIAL_1) +
-                                   slot_index);
-  ESP_RETURN_ON_ERROR(WifiNVSSet(reinterpret_cast<const uint8_t*>(&entry), key,
-                                 sizeof(WiFiEntry)),
+  Key key = nvs_keys::WIFI_CREDENTIAL_KEYS[slot_index];
+  ESP_RETURN_ON_ERROR(WIFI.Set(key, reinterpret_cast<const uint8_t*>(&entry),
+                               sizeof(WiFiEntry)),
                       TAG, "Failed to set NVS entry");
 
   hash_[slot_index] =
       esp_crc32_le(0, reinterpret_cast<const uint8_t*>(entry.ssid),
                    strnlen(entry.ssid, sizeof(entry.ssid)));
-  ESP_RETURN_ON_ERROR(WifiNVSSet(reinterpret_cast<const uint8_t*>(hash_.data()),
-                                 NVSKey::WIFI_HASH, HashBytes()),
-                      TAG, "Failed to save Wi-Fi hash");
+  ESP_RETURN_ON_ERROR(WIFI.Set(nvs_keys::WIFI_HASH, hash_), TAG,
+                      "Failed to save Wi-Fi hash");
 
   return ESP_OK;
 }
@@ -78,10 +78,9 @@ esp_err_t WiFiStorage::Add(const WiFiEntry& entry) {
     return ESP_OK;
   }
 
-  NVSKey key = static_cast<NVSKey>(static_cast<int>(NVSKey::WIFI_CREDENTIAL_1) +
-                                   slot_index);
-  ESP_RETURN_ON_ERROR(WifiNVSSet(reinterpret_cast<const uint8_t*>(&entry), key,
-                                 sizeof(WiFiEntry)),
+  Key key = nvs_keys::WIFI_CREDENTIAL_KEYS[slot_index];
+  ESP_RETURN_ON_ERROR(WIFI.Set(key, reinterpret_cast<const uint8_t*>(&entry),
+                               sizeof(WiFiEntry)),
                       TAG, "Failed to update Wi-Fi entry at index %d",
                       slot_index);
 
@@ -95,35 +94,33 @@ esp_err_t WiFiStorage::Remove(const std::string& ssid) {
     return ESP_ERR_NOT_FOUND;
   }
 
-  NVSKey key = static_cast<NVSKey>(static_cast<int>(NVSKey::WIFI_CREDENTIAL_1) +
-                                   slot_index);
-  ESP_RETURN_ON_ERROR(WifiNVSEraseKey(key), TAG,
+  Key key = nvs_keys::WIFI_CREDENTIAL_KEYS[slot_index];
+  ESP_RETURN_ON_ERROR(WIFI.EraseKey(key), TAG,
                       "Failed to delete Wi-Fi entry at index %d", slot_index);
 
   hash_[slot_index] = 0;
-  ESP_RETURN_ON_ERROR(WifiNVSSet(reinterpret_cast<const uint8_t*>(hash_.data()),
-                                 NVSKey::WIFI_HASH, HashBytes()),
-                      TAG, "Failed to save Wi-Fi hash");
+  ESP_RETURN_ON_ERROR(WIFI.Set(nvs_keys::WIFI_HASH, hash_), TAG,
+                      "Failed to save Wi-Fi hash");
   return ESP_OK;
 }
 
 esp_err_t WiFiStorage::RemoveAll() {
   Reset();
-  return WifiNVSEraseAll();
+  return WIFI.EraseAll();
 }
 
 esp_err_t WiFiStorage::Get(uint8_t index, WiFiEntry* entry) const {
   if (index >= WIFI_SLOT_COUNT) {
     return ESP_ERR_INVALID_ARG;
   }
-  NVSKey key =
-      static_cast<NVSKey>(static_cast<int>(NVSKey::WIFI_CREDENTIAL_1) + index);
+
+  Key key = nvs_keys::WIFI_CREDENTIAL_KEYS[index];
   size_t size = sizeof(WiFiEntry);
-  esp_err_t err = WifiNVSGet(reinterpret_cast<uint8_t*>(entry), &size, key);
-  ESP_RETURN_ON_ERROR(err, TAG, "Failed to get Wi-Fi entry at index %d", index);
+  ESP_RETURN_ON_ERROR(WIFI.Get(key, reinterpret_cast<uint8_t*>(entry), size),
+                      TAG, "Failed to get Wi-Fi entry at index %d", index);
   entry->ssid[sizeof(entry->ssid) - 1] = '\0';      // Ensure null-termination
   entry->passwd[sizeof(entry->passwd) - 1] = '\0';  // Ensure null-termination
-  return err;
+  return ESP_OK;
 }
 
 bool WiFiStorage::HasSSID(const char* ssid) const {

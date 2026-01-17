@@ -1,35 +1,71 @@
-.pio
+# ==========================================
+# IDE and Editor Files
+# ==========================================
 .vscode
+.zed/
+.idea/
+.nvim.lua
+.clangd
+.claude/
+CLAUDE.local.md
+
+# ==========================================
+# Build Artifacts
+# ==========================================
+.pio
+build/
 .cache/
 compile_commands.json
-private_config.ini
-venv
 .unpacked_fs
 flash_contents.bin
 mklittlefs
-__pycache__
-build/
-.clangd
-.nvim.lua
+hash.json
+component_requires.cmake
+
+# ==========================================
+# ESP-IDF and Components
+# ==========================================
 managed_components/
 sdkconfig
 sdkconfig.old
 components/pb/nanopb/
+
+# ==========================================
+# Python
+# ==========================================
+__pycache__
+venv
+device_configs/
+python/device_configs/
+
+# ==========================================
+# Certificates and Security
+# ==========================================
 server_certs/ca_key.pem
+mqtt_certs
 .token
+private_config.ini
+sign_keys/
+
+# ==========================================
+# Temporary and Backup Files
+# ==========================================
 *.orig
+*.bak
+*.tmp
 *_BACKUP_*.txt
 *_BASE_*.txt
 *_LOCAL_*.txt
 *_REMOTE_*.txt
-.idea/
-*.bak
+
+# ==========================================
+# Project-Specific
+# ==========================================
 bird_fs/
 changelog.txt
-mqtt_certs
 
-# Ignore symbolic links
-littlefs
-!littlefs/
-
-hash.json
+# ==========================================
+# Build-Generated Directories
+# ==========================================
+/littlefs/
+/unlocked_fs/

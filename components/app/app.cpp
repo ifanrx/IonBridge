@@ -5,8 +5,8 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <cstring>
-#include <utility>
 #include <vector>
 
 #include "controller.h"
@@ -18,42 +18,32 @@
 
 static const char *TAG = "App";
 
-void App::Srv(ServiceCommand command, SrvFunc func, ServiceScope scope) {
-  switch (scope) {
-    case ServiceScope::SERVICE_SCOPE_BLE:
-      m_ble_services[command] = std::move(func);
-      break;
+constexpr int POWER_CMD_MIN_ID = 0x40;
+constexpr int POWER_CMD_MAX_ID = 0x6F;
 
-    case ServiceScope::SERVICE_SCOPE_MQTT:
-      m_mqtt_services[command] = std::move(func);
-      break;
-
-    case ServiceScope::SERVICE_SCOPE_ALL:
-      m_ble_services[command] = func;              // Use copy for BLE
-      m_mqtt_services[command] = std::move(func);  // Move original to MQTT
-      break;
-  }
-}
-
-bool App::HasSrv(uint8_t service, ServiceScope scope) {
+bool App::HasBLESrv(uint8_t service) {
   ServiceCommand command = static_cast<ServiceCommand>(service);
-  switch (scope) {
-    case ServiceScope::SERVICE_SCOPE_BLE:
-      return m_ble_services.find(command) != m_ble_services.end();
-    case ServiceScope::SERVICE_SCOPE_MQTT:
-      return m_mqtt_services.find(command) != m_mqtt_services.end();
-    case ServiceScope::SERVICE_SCOPE_ALL:
-      return m_ble_services.find(command) != m_ble_services.end() &&
-             m_mqtt_services.find(command) != m_mqtt_services.end();
-    default:
-      return false;
-  }
+  return m_ble_services.find(command) != m_ble_services.end();
 }
 
-ResponseStatus App::PreCheckSrv(ServiceCommand command) {
-  if (!is_service_available_at_high_temp(command, true)) {
-    return ResponseStatus::FLASH_NOT_WRITABLE_AT_HIGH_TEMPERATURE;
+bool App::HasMQTTSrv(uint8_t service) {
+  bool has_service = false;
+  ServiceCommand command = static_cast<ServiceCommand>(service);
+  has_service = m_mqtt_services.find(command) != m_mqtt_services.end();
+  if (!has_service) {
+    AdminCommand admin_command = static_cast<AdminCommand>(service);
+    has_service = m_mqtt_admin_services.find(admin_command) !=
+                  m_mqtt_admin_services.end();
   }
+  return has_service;
+}
+
+pb_CommandStatus App::PreCheckSrv(ServiceCommand command) {
+  if (!is_service_available_at_high_temp(command, true)) {
+    return pb_CommandStatus_FLASH_NOT_WRITABLE_AT_HIGH_TEMPERATURE;
+  }
+
+  uint8_t command_var = static_cast<uint8_t>(command);
   DeviceController &controller = DeviceController::GetInstance();
   if (!controller.is_power_on()) {
     switch (command) {
@@ -64,8 +54,8 @@ ResponseStatus App::PreCheckSrv(ServiceCommand command) {
       case ServiceCommand::SET_DISPLAY_MODE:
       case ServiceCommand::SET_DISPLAY_FLIP: {
         ESP_LOGW(TAG, "Device is power off. Service 0x%02x is disabled",
-                 command);
-        return ResponseStatus::FAILURE;
+                 command_var);
+        return pb_CommandStatus_FAILURE;
       }
       default:
         break;
@@ -76,74 +66,35 @@ ResponseStatus App::PreCheckSrv(ServiceCommand command) {
     ESP_LOGW(
         TAG,
         "Device is waiting for OTA confirmation. Service 0x%02x is disabled",
-        command);
-    return ResponseStatus::FAILURE;
+        command_var);
+    return pb_CommandStatus_FAILURE;
   }
   // Check if power related commands
-  if (command >= ServiceCommand::TOGGLE_PORT_POWER &&
-      command < ServiceCommand::SET_DISPLAY_INTENSITY &&
+  if (command_var >= POWER_CMD_MIN_ID && command_var <= POWER_CMD_MAX_ID &&
       !PowerAllocator::GetInstance().IsConfigured()) {
     ESP_LOGE(TAG,
              "Device power allocator is not configured, disabling "
              "service 0x%02x",
-             command);
-    return ResponseStatus::FAILURE;
+             command_var);
+    return pb_CommandStatus_FAILURE;
   }
-  return ResponseStatus::SUCCESS;
+  return pb_CommandStatus_SUCCESS;
 }
 
-void App::ExecSrvFromMQTT(uint8_t service, const std::vector<uint8_t> &request,
-                          std::vector<uint8_t> &response) {
-  // Retrieve the appropriate handler from the service mapping
-  ServiceCommand command = static_cast<ServiceCommand>(service);
-
-  if (m_mqtt_services.find(command) == m_mqtt_services.end()) {
-    ESP_LOGW(TAG, "Service not found: %d", service);
-    // Return failure if the service does not exist
-    response.emplace_back(ResponseStatus::FAILURE);
-    return;
-  }
-
-  ResponseStatus res = PreCheckSrv(command);
-  if (res != ResponseStatus::SUCCESS) {
-    response.emplace_back(res);
-    return;
-  }
-
-  // Obtain the corresponding handler
-  auto handler = m_mqtt_services.at(command);
-  esp_err_t err = handler(request, response);
-  if (err != ESP_OK) {
-    ESP_ERROR_COMPLAIN(err, "Failed to execute MQTT App service 0x%02x",
-                       service);
-
-    ResponseStatus res;
-    if (!is_service_available_at_high_temp(command)) {
-      res = ResponseStatus::FLASH_NOT_WRITABLE_AT_HIGH_TEMPERATURE;
-    } else {
-      res = ResponseStatus::FAILURE;
-    }
-    response.insert(response.begin(), res);
-  } else {
-    response.insert(response.begin(), ResponseStatus::SUCCESS);
-  }
-}
-
-size_t App::ExecSrvFromBle(uint8_t service, uint8_t *payload,
-                           size_t payloadSize, uint8_t *response,
-                           size_t responseSize) {
+size_t App::ExecBLESrv(uint8_t service, uint8_t *payload, size_t payloadSize,
+                       uint8_t *response, size_t responseSize) {
   // Retrieve the handler from the service mapping
   ServiceCommand command = static_cast<ServiceCommand>(service);
 
   if (m_ble_services.find(command) == m_ble_services.end()) {
     ESP_LOGW(TAG, "Service 0x%02x not found", service);
     // Return failure if the service does not exist
-    response[0] = ResponseStatus::FAILURE;
+    response[0] = pb_CommandStatus_FAILURE;
     return 1;
   }
 
-  ResponseStatus res = PreCheckSrv(command);
-  if (res != ResponseStatus::SUCCESS) {
+  pb_CommandStatus res = PreCheckSrv(command);
+  if (res != pb_CommandStatus_SUCCESS) {
     ESP_LOGW(TAG, "Service 0x%02x is disabled", service);
     response[0] = res;
     return 1;
@@ -169,7 +120,7 @@ size_t App::ExecSrvFromBle(uint8_t service, uint8_t *payload,
 
   // Fill the result and return
   if (err == ESP_OK) {
-    response[0] = ResponseStatus::SUCCESS;
+    response[0] = pb_CommandStatus_SUCCESS;
     std::copy(data.begin(), data.end(), response + 1);
     return data.size() + 1;
   }
@@ -177,15 +128,10 @@ size_t App::ExecSrvFromBle(uint8_t service, uint8_t *payload,
   ESP_ERROR_COMPLAIN(err, "Failed to execute BLE App service 0x%02x", service);
 
   if (!is_service_available_at_high_temp(command)) {
-    response[0] = ResponseStatus::FLASH_NOT_WRITABLE_AT_HIGH_TEMPERATURE;
+    response[0] = pb_CommandStatus_FLASH_NOT_WRITABLE_AT_HIGH_TEMPERATURE;
   } else {
-    response[0] = ResponseStatus::FAILURE;
+    response[0] = pb_CommandStatus_FAILURE;
   }
 
   return 1;
-}
-
-void App::String(const std::string &str, std::vector<uint8_t> &response) {
-  response.resize(str.size());
-  std::copy(str.begin(), str.end(), response.begin());
 }

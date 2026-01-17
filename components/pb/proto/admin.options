@@ -1,0 +1,30 @@
+pb.* proto3_singular_msgs:true
+pb.* enum_intsize:IS_8
+
+pb.ManageFPGAConfigReq.level int_size:IS_8
+
+pb.GetDevicePasswordResp.password max_size:4,fixed_length:true
+
+pb.ForwardPortReq.data max_size:192
+pb.ForwardPortResp.data max_size:192
+
+pb.SetLicenseReq.data max_count:10,fixed_count:false
+
+pb.RequestLicenseInfo.nonce max_size:8,fixed_length:true
+
+
+pb.ReadADCResp.adc_value int_size:IS_8
+
+pb.CleanupNVSConfigsResp.message max_size:128
+
+// LittleFS CRUD messages
+// NOTE: data sizes reduced from 1024 to 512 to avoid stack overflow
+// in telemetry_task (2048 byte stack, pb_AdminCommandResponse on stack)
+pb.WriteFileReq.path max_size:128
+pb.WriteFileReq.data max_size:512
+pb.ReadFileReq.path max_size:128
+pb.ReadFileResp.data max_size:512
+pb.DeleteFileReq.path max_size:128
+pb.ListDirReq.path max_size:128
+pb.ListDirResp.entries max_size:32,max_count:16
+

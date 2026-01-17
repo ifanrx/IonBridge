@@ -1,5 +1,7 @@
 file(GLOB SRCS_FILES *.cpp)
-set(PRIV_REQUIRE_COMPONENTS
+set(TASK_PRIV_REQUIRE_COMPONENTS
+    acdc
+    app
     app_update
     ble
     controller
@@ -12,12 +14,23 @@ set(PRIV_REQUIRE_COMPONENTS
     nvs_data
     power
     rpc
-    service
+    utils
     wifi)
+
+idf_build_get_property(target IDF_TARGET)
+if(NOT ${target} STREQUAL "linux")
+  list(APPEND TASK_PRIV_REQUIRE_COMPONENTS espcoredump)
+endif()
 
 include(${PROJECT_DIR}/component_requires.cmake)
 if(ENABLE_COMPONENT_UART)
-  list(APPEND PRIV_REQUIRE_COMPONENTS uart)
+  list(APPEND TASK_PRIV_REQUIRE_COMPONENTS uart)
+  if(ENABLE_COMPONENT_PROGRAMMER)
+    list(APPEND TASK_PRIV_REQUIRE_COMPONENTS programmer)
+  endif()
+endif()
+if(ENABLE_COMPONENT_I2C)
+  list(APPEND TASK_PRIV_REQUIRE_COMPONENTS i2c)
 endif()
 
 idf_component_register(
@@ -26,7 +39,9 @@ idf_component_register(
   INCLUDE_DIRS
   "include"
   REQUIRES
-  mqtt_message
+  chip_data_types
+  pb
+  service
   version
   PRIV_REQUIRES
-  ${PRIV_REQUIRE_COMPONENTS})
+  ${TASK_PRIV_REQUIRE_COMPONENTS})

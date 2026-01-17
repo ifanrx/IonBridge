@@ -10,6 +10,7 @@
 
 #include "freertos/FreeRTOS.h"  // IWYU pragma: keep
 #include "freertos/task.h"      // IWYU pragma: keep
+#include "lwip/inet.h"
 
 #ifndef MAX
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
@@ -23,7 +24,7 @@
              (static_cast<int32_t>(new_val) - static_cast<int32_t>(old_avg)) / \
                  static_cast<float>(count))
 
-#ifdef __cpluscplus
+#ifdef __cplusplus
 extern "C" {
 #endif
 
@@ -31,7 +32,6 @@ extern "C" {
 // static int global_log_buffer_position = 0;
 
 #define DELAY_MS(ms) vTaskDelay(pdMS_TO_TICKS(ms))
-std::string to_hex_string(const uint8_t *data, size_t len);
 uint32_t bytes_to_u32(const uint8_t *data);
 void int_to_bytes(uint8_t *bytes, int num);
 uint16_t crc16(uint8_t *data, uint8_t length);
@@ -64,10 +64,27 @@ uint16_t crc16(uint8_t *data, uint8_t length);
 
 void log_memory_info();
 void hex_to_uint8_array(const char *hex, uint8_t *array, size_t size);
+void hexlify(const uint8_t *data, size_t len, char *out, size_t out_len);
+uint32_t get_epoch_timestamp();
+void sync_system_time(uint64_t timestamp);
 
-#ifdef __cpluscplus
+#ifdef __cplusplus
 }
 #endif
+
+std::string to_hex_string(const uint8_t *data, size_t len);
+
+/**
+ * Resolves a hostname to an IPv4 address.
+ *
+ * @param hostname The hostname to resolve.
+ * @param addr Optional pointer to store the resolved IPv4 address (in network
+ * byte order).
+ * @param is_udp If true, resolves for UDP; otherwise, resolves for TCP.
+ * @return true if the hostname was successfully resolved, false otherwise.
+ */
+bool resolve_hostname(const char *hostname, in_addr_t *addr = nullptr,
+                      bool is_udp = false);
 
 class BytesWriter {
  public:

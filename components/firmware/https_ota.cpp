@@ -255,7 +255,7 @@ OTA_FAILED:
   aes_cbc_decrypt_deinit();
   ESP_ERROR_COMPLAIN(ret, "OTA failed");
   log_memory_info();
-  if (!(https_ota_handle == NULL || is_ota_timeout)) {
+  if (https_ota_handle != NULL && !is_ota_timeout) {
     esp_https_ota_abort(https_ota_handle);
   }
   return ret;

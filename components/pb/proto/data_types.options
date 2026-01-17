@@ -1,0 +1,115 @@
+pb.* proto3_singular_msgs:true
+pb.* enum_intsize:IS_8
+
+pb.Version.* int_size:IS_8
+
+pb.ClientPDStatus.battery_vid int_size:IS_16
+pb.ClientPDStatus.battery_pid int_size:IS_16
+pb.ClientPDStatus.battery_design_capacity int_size:IS_16
+pb.ClientPDStatus.battery_last_full_charge_capacity int_size:IS_16
+pb.ClientPDStatus.battery_present_capacity int_size:IS_16
+pb.ClientPDStatus.battery_status int_size:IS_8
+pb.ClientPDStatus.cable_active_phy_type int_size:IS_8
+pb.ClientPDStatus.cable_latency int_size:IS_8
+pb.ClientPDStatus.cable_max_vbus_voltage int_size:IS_8
+pb.ClientPDStatus.cable_max_vbus_current int_size:IS_8
+pb.ClientPDStatus.cable_usb_highest_speed int_size:IS_8
+pb.ClientPDStatus.cable_active_element int_size:IS_8
+pb.ClientPDStatus.sink_capabilities int_size:IS_8
+pb.ClientPDStatus.sink_cap_pdo_count int_size:IS_8
+pb.ClientPDStatus.status_temperature int_size:IS_8
+pb.ClientPDStatus.cable_vid int_size:IS_16
+pb.ClientPDStatus.cable_pid int_size:IS_16
+pb.ClientPDStatus.manufacturer_vid int_size:IS_16
+pb.ClientPDStatus.manufacturer_pid int_size:IS_16
+pb.ClientPDStatus.sink_minimum_pdp int_size:IS_8
+pb.ClientPDStatus.sink_operational_pdp int_size:IS_8
+pb.ClientPDStatus.sink_maximum_pdp int_size:IS_8
+pb.ClientPDStatus.operating_current int_size:IS_16
+pb.ClientPDStatus.pd_revision int_size:IS_8
+pb.ClientPDStatus.operating_voltage int_size:IS_16
+pb.ClientPDStatus.cable_xid int_size:IS_32
+pb.ClientPDStatus.bcd_device int_size:IS_16
+
+pb.PortDetails packed_struct:true
+pb.PortDetails.iout_value int_size:IS_16
+pb.PortDetails.vout_value int_size:IS_16
+pb.PortDetails.die_temperature int_size:IS_16
+pb.PortDetails.vin_value int_size:IS_16
+pb.PortDetails.session_id int_size:IS_16
+pb.PortDetails.power_budget int_size:IS_8
+pb.PortDetails.manufacturer_vid int_size:IS_16
+pb.PortDetails.manufacturer_pid int_size:IS_16
+pb.PortDetails.battery_vid int_size:IS_16
+pb.PortDetails.battery_pid int_size:IS_16
+
+pb.DeviceBootInfo.ble_mac max_size:6,fixed_length:true
+pb.DeviceBootInfo.ipv4 max_size:4,fixed_length:true
+pb.DeviceBootInfo.ipv6 max_size:16,fixed_length:true
+pb.DeviceBootInfo.hardware_revision max_length:8
+pb.DeviceBootInfo.device_model max_length:8
+pb.DeviceBootInfo.product_family max_length:8
+
+pb.PowerHistoricalData.data max_count:8
+
+pb.PowerAllocationData.port_allocations max_count:8
+
+pb.SW3566BootloaderInfo.infos max_count:8
+
+pb.CoredumpPartitionSlice.data type:FT_POINTER max_count:2048 int_size:IS_8
+
+pb.*.current int_size:IS_16
+pb.*.voltage int_size:IS_16
+pb.*.charging_protocol_version int_size:IS_8
+pb.*.temperature int_size:IS_16
+pb.PowerStatistics.battery_last_full_charge_capacity int_size:IS_16
+pb.PowerStatistics.battery_present_capacity int_size:IS_16
+
+pb.SSIDInfo.ssid max_length:32
+pb.WiFiRecord.ssid max_length:32
+
+pb.PowerAllocationEntry packed_struct:true
+pb.PowerAllocationEntry.power_allocation int_size:IS_16,max_count:5,fixed_count:true
+pb.PowerAllocationTable packed_struct:true
+pb.PowerAllocationTable.version int_size:IS_8
+pb.PowerAllocationTable.entries max_count:32,fixed_count:true
+
+pb.PortConfig packed_struct:true
+pb.PortConfig.version int_size:IS_8
+pb.PortConfig.features label_override:LABEL_REQUIRED
+
+pb.DeviceInfo.psn max_length:16
+pb.DeviceInfo.model max_length:8
+pb.DeviceInfo.ble_mac max_length:12
+pb.DeviceInfo.wifi_mac max_length:12
+pb.DeviceInfo.bssid max_length:12
+pb.DeviceInfo.ssid max_length:32
+pb.DeviceInfo.rssi int_size:IS_8
+pb.DeviceInfo.wifi_protocol int_size:IS_8
+pb.DeviceInfo.channel int_size:IS_8
+pb.DeviceInfo.ap_version label_override:LABEL_REQUIRED
+pb.DeviceInfo.bp_version label_override:LABEL_REQUIRED
+pb.DeviceInfo.fpga_version label_override:LABEL_REQUIRED
+pb.DeviceInfo.zrlib_version label_override:LABEL_REQUIRED
+
+pb.PortStatusData.features label_override:LABEL_REQUIRED
+pb.PortStatusData.details label_override:LABEL_REQUIRED
+pb.PortStatusData.custom_pdo_voltage_mv int_size:IS_16
+
+pb.FPGAConfig.* int_size:IS_8
+
+pb.PowerConfig packed_struct:true
+pb.PowerConfig.* int_size:IS_8
+pb.PowerConfig.power_budget int_size:IS_16
+
+pb.LicenseData.f max_count:30,fixed_count:false
+
+pb.Task.Command.data max_size:320
+pb.Task.commands max_count:2
+
+pb.ConfigRequest.reason max_length:64
+
+pb.MachineConfig.ports max_count:8
+
+pb.DisplayConfig.intensity int_size:IS_8
+

@@ -3,14 +3,16 @@
 
 #include <string>
 
-#include "esp_timer.h"
+#include "sdkconfig.h"
 #include "singleton.h"
 
 enum PortStateType {
   UNKNOWN = -1,
+  BOOTING,
   ACTIVE,
   INACTIVE,
   ATTACHED,
+  DETACHING,
   OPENING,
   CLOSING,
   OVER_TEMP_WARNING,
@@ -20,6 +22,7 @@ enum PortStateType {
   RECOVERING,
   DEAD,
   POWER_LIMITING,
+  COUNT,
 };
 
 class Port;  // forward declaration
@@ -40,12 +43,16 @@ class PortState {
     switch (type_) {
       case UNKNOWN:
         return "UNKNOWN";
+      case BOOTING:
+        return "BOOTING";
       case ACTIVE:
         return "ACTIVE";
       case INACTIVE:
         return "INACTIVE";
       case ATTACHED:
         return "ATTACHED";
+      case DETACHING:
+        return "DETACHING";
       case OPENING:
         return "OPENING";
       case CLOSING:
@@ -70,9 +77,20 @@ class PortState {
   }
 };
 
+class PortBootingState : public PortState, public Singleton<PortBootingState> {
+ public:
+  void Handle(Port &port) override {}
+
+ private:
+  // Allow Singleton to access the constructor
+  friend class Singleton<PortBootingState>;
+  // Private constructor to prevent external instantiation
+  PortBootingState() : PortState(PortStateType::BOOTING) {}
+};
+
 class PortActiveState : public PortState, public Singleton<PortActiveState> {
  public:
-  void Handle(Port &port) override;
+  void Handle(Port &port) override {}
 
  private:
   // Allow Singleton to access the constructor
@@ -96,13 +114,29 @@ class PortInactiveState : public PortState,
 class PortAttachedState : public PortState,
                           public Singleton<PortAttachedState> {
  public:
-  void Handle(Port &port) override;
+  void Entering(Port &port) override;
+  void Handle(Port &port) override {}
+  void Exiting(Port &port) override;
 
  private:
   // Allow Singleton to access the constructor
   friend class Singleton<PortAttachedState>;
   // Private constructor to prevent external instantiation
   PortAttachedState() : PortState(PortStateType::ATTACHED) {}
+};
+
+class PortDetachingState : public PortState,
+                           public Singleton<PortDetachingState> {
+ public:
+  void Entering(Port &port) override;
+  void Handle(Port &port) override;
+  void Exiting(Port &port) override;
+
+ private:
+  // Allow Singleton to access the constructor
+  friend class Singleton<PortDetachingState>;
+  // Private constructor to prevent external instantiation
+  PortDetachingState() : PortState(PortStateType::DETACHING) {}
 };
 
 class PortOpeningState : public PortState, public Singleton<PortOpeningState> {
@@ -183,17 +217,10 @@ class PortCheckingState : public PortState,
   void Exiting(Port &port) override;
 
  private:
-  int64_t enter_time_ = -1;
-
   // Allow Singleton to access the constructor
   friend class Singleton<PortCheckingState>;
   // Private constructor to prevent external instantiation
   PortCheckingState() : PortState(PortStateType::CHECKING) {}
-
-  esp_timer_handle_t checking_timer_ = nullptr;
-  void StartWatchdog(Port &port);
-  void StopWatchdog();
-  static void WatchdogCallback(void *arg);
 };
 
 class PortRecoveringState : public PortState,
@@ -210,6 +237,7 @@ class PortRecoveringState : public PortState,
 
 class PortDeadState : public PortState, public Singleton<PortDeadState> {
  public:
+  void Entering(Port &port) override;
   void Handle(Port &port) override {}
 
  private:

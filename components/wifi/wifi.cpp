@@ -30,7 +30,6 @@
 #include "freertos/idf_additions.h"
 #include "freertos/projdefs.h"
 #include "ionbridge.h"
-#include "lwip/netdb.h"
 #include "machine_info.h"
 #include "sdkconfig.h"
 #include "syslog.h"
@@ -41,8 +40,6 @@
 #ifdef CONFIG_LWIP_IPV6
 #include "lwip/ip6_addr.h"
 #endif
-
-#define WIFI_RECORD_COUNT CONFIG_WIFI_RECORD_COUNT
 
 #define WIFI_STA_START_TIMEOUT CONFIG_ESP_WIFI_STA_START_TIMEOUT
 
@@ -56,12 +53,6 @@ static esp_ip4_addr_t local_ip;
 static esp_ip6_addr_t local_ip6;
 #endif
 
-#define WAIT_FOR_NOTIFICATION(delay_ms, ssid, goto_tag)                        \
-  if (xTaskNotifyWait(0, 0, NULL, pdMS_TO_TICKS(delay_ms)) == pdPASS) {        \
-    ESP_LOGI(TAG, "Exiting Wi-Fi task for SSID: %s after notification", ssid); \
-    goto goto_tag;                                                             \
-  }
-
 static bool wifi_is_ready = false, wifi_is_connected_ = false;
 
 TaskHandle_t wifi_task_handle = NULL;
@@ -74,6 +65,7 @@ static void ip_event_handler(void *arg, esp_event_base_t event_base,
     ESP_LOGE(TAG, "Unhandled event base: %s", event_base);
     return;
   }
+
   switch (event_id) {
 #ifdef CONFIG_LWIP_IPV6
     case IP_EVENT_GOT_IP6: {
@@ -86,6 +78,7 @@ static void ip_event_handler(void *arg, esp_event_base_t event_base,
 #endif
     case IP_EVENT_STA_GOT_IP: {
       ble_adv_stop();
+      SyslogClient::GetInstance().StartRemoteLogging();
       ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
       local_ip = event->ip_info.ip;
       ESP_LOGI(TAG,
@@ -98,7 +91,7 @@ static void ip_event_handler(void *arg, esp_event_base_t event_base,
     case IP_EVENT_STA_LOST_IP:
       ESP_LOGE(TAG, "IP address lost");
       ble_adv_delay_start();
-      SyslogClient::GetInstance().Cleanup();
+      SyslogClient::GetInstance().StopRemoteLogging();
       wifi_controller.Notify(WiFiEventType::LOST_IP);
       break;
     default:
@@ -149,6 +142,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
       ESP_LOGI(TAG, "WIFI_EVENT_AP_STADISCONNECTED");
     } break;
     case WIFI_EVENT_STA_DISCONNECTED: {
+      ESP_LOGI(TAG, "WIFI_EVENT_STA_DISCONNECTED");
       wifi_is_connected_ = false;
       wifi_controller.OnDisconnected(event_data);
     } break;
@@ -426,6 +420,10 @@ void WiFiController::Loop() {
   WiFiEventType event = WiFiEventType::NONE;
   state_ = &WiFiConfigurationState::GetInstance();
   state_->Entering(ctx_);
+#ifdef IONBRIDGE_WIFI_HOST_TEST
+  state_history_.clear();
+  state_history_.push_back(state_->Type());
+#endif
   while (true) {
     event = WiFiEventType::NONE;
     xResult = xTaskNotifyWait(pdTRUE, pdTRUE, &val, pdMS_TO_TICKS(10));
@@ -454,6 +452,9 @@ void WiFiController::SetState(WiFiState *state) {
   state_->Exiting(ctx_);
   state_ = state;
   state_->Entering(ctx_);
+#ifdef IONBRIDGE_WIFI_HOST_TEST
+  state_history_.push_back(state_->Type());
+#endif
 }
 
 void WiFiController::Notify(WiFiEventType event, bool overwrite) {
@@ -491,7 +492,7 @@ void WiFiController::OnConnected(void *event_data) {
 
 void WiFiController::OnDisconnected(void *event_data) {
   WiFiManager::GetInstance().OnDisconnected();
-  SyslogClient::GetInstance().Cleanup();
+  SyslogClient::GetInstance().StopRemoteLogging();
   wifi_event_sta_disconnected_t *disconnected =
       (wifi_event_sta_disconnected_t *)event_data;
   ESP_LOGE(TAG, "Disconnected from %s (%s), RSSI: %d, reason: %d",
@@ -544,28 +545,8 @@ RECONNECT_NEXT_WIFI:
   Notify(WiFiEventType::DISCONNECTED);
 }
 
-bool WiFiController::ResolveAddress(const char *hostname) {
-  // Initialize addrinfo hints using C++ initializer list for clarity
-  struct addrinfo hints = {
-      .ai_family = AF_INET,
-      .ai_socktype = SOCK_STREAM,
-  };
-  struct addrinfo *res = nullptr;
-
-  // Perform DNS lookup
-  int err = getaddrinfo(hostname, nullptr, &hints, &res);
-
-  if (err != 0 || res == nullptr) {
-    ESP_LOGE(TAG, "DNS lookup failed for %s: %d", hostname, err);
-    if (res) {
-      freeaddrinfo(res);
-    }
-    return false;
-  }
-
-  // DNS lookup succeeded
-  freeaddrinfo(res);  // Free the allocated memory
-  return true;
-}
-
 WiFiController wifi_controller;
+
+#ifdef IONBRIDGE_WIFI_HOST_TEST
+void mock_wifi_initialize() { wifi_is_ready = true; }
+#endif

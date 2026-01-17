@@ -1,23 +1,29 @@
 #include "firmware.h"
 
 #include <cstdio>
+#include <cstring>
 #include <string>
 
 #include "esp_check.h"
 #include "esp_err.h"
+#include "esp_http_client.h"
 #include "esp_log.h"
+#include "esp_log_buffer.h"
+#include "esp_log_level.h"
 #include "machine_info.h"
 #include "mbedtls/aes.h"
+#include "nvs.h"
+#include "nvs_key.h"
 #include "nvs_namespace.h"
 #include "sdkconfig.h"
+#include "storage.h"
 #include "utils.h"
 #include "version.h"
 
-#define FIRMWARE_DOWNLOAD_ENDPOINT CONFIG_FIRMWARE_DOWNLOAD_ENDPOINT
-#define FIRMWARE_CHECKSUM_DOWNLOAD_ENDPOINT \
-  CONFIG_FIRMWARE_CHECKSUM_DOWNLOAD_ENDPOINT
 #define AES_BLOCK_SIZE 16
 #define AES_CHUNK_SIZE (16 * AES_BLOCK_SIZE)
+
+using nvs_namespace::protected_data::DEVICE_DATA;
 
 static const char *TAG = "Firmware";
 
@@ -32,8 +38,8 @@ static esp_err_t get_device_aes_key(uint8_t *key, size_t *length, uint8_t *iv,
   if (*length != 32 || *iv_length != 16) {
     return ESP_ERR_NVS_INVALID_LENGTH;
   }
-  ESP_RETURN_ON_ERROR(DeviceNVSGet(key, length, NVSKey::DEVICE_AES_KEY), TAG,
-                      "get_device_aes_key");
+  ESP_RETURN_ON_ERROR(DEVICE_DATA.Get(nvs_keys::DEVICE_AES_KEY, key, *length),
+                      TAG, "get_device_aes_key");
   // Use device psn as AES IV
   const std::string &psn = MachineInfo::GetInstance().GetPSN();
   memcpy(iv, psn.c_str(), *iv_length);
@@ -106,14 +112,3 @@ esp_err_t aes_cbc_decrypt(const char *in, size_t in_len, char *out,
   return ESP_OK;
 }
 
-esp_err_t get_firmware_url(uint8_t type, const Version &version, char *url,
-                           size_t url_len) {
-  url[0] = '\0';
-  return ESP_OK;
-}
-
-esp_err_t get_firmware_checksum_url(uint8_t type, const char *version,
-                                    char *url, size_t url_len) {
-  url[0] = '\0';
-  return ESP_OK;
-}

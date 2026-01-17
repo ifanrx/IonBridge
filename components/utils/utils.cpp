@@ -1,11 +1,22 @@
 #include "utils.h"
 
+#include <sys/time.h>
+
+#include <cinttypes>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <iomanip>
+#include <ios>
 #include <sstream>
+#include <string>
 
 #include "esp_log.h"
 #include "esp_system.h"
+#include "lwip/inet.h"
+#include "lwip/netdb.h"
+#include "lwip/sockets.h"  // IWYU pragma: keep
 
 #define HASH_LENGTH 32
 // CRC-16-CCITT Polynomial
@@ -85,6 +96,71 @@ void hex_to_uint8_array(const char *hex, uint8_t *arr, size_t arr_len) {
     // Convert the hex substring to a uint8_t
     arr[i] = (uint8_t)strtoul(temp, NULL, 16);
   }
+}
+
+void hexlify(const uint8_t *data, size_t len, char *out, size_t out_len) {
+  for (size_t i = 0; i < len; i++) {
+    snprintf(out + (i * 2), out_len - (i * 2), "%02x", data[i]);
+  }
+}
+
+uint32_t get_epoch_timestamp() {
+  struct timeval tv;
+  gettimeofday(&tv, NULL);
+  return static_cast<uint32_t>(tv.tv_sec);
+}
+
+void sync_system_time(uint64_t timestamp) {
+  struct timeval tv;
+  tv.tv_sec = timestamp;
+  tv.tv_usec = 0;
+
+  settimeofday(&tv, nullptr);
+}
+
+bool resolve_hostname(const char *hostname, in_addr_t *addr, bool is_udp) {
+  struct addrinfo hints, *res, *p;
+  memset(&hints, 0, sizeof(hints));
+
+  hints.ai_family = AF_INET;  // Only IPv4
+  if (is_udp) {
+    hints.ai_socktype = SOCK_DGRAM;   // Only UDP
+    hints.ai_protocol = IPPROTO_UDP;  // Only UDP
+  } else {
+    hints.ai_socktype = SOCK_STREAM;  // Only TCP
+    hints.ai_protocol = IPPROTO_TCP;  // Only TCP
+  }
+
+  int err = getaddrinfo(hostname, nullptr, &hints, &res);
+  if (err != 0) {
+    ESP_LOGE(TAG, "getaddrinfo failed for %s: %d", hostname, err);
+    if (res) {
+      freeaddrinfo(res);
+    }
+    return false;
+  }
+  if (res == nullptr) {
+    ESP_LOGE(TAG, "getaddrinfo returned no results for: %s", hostname);
+    return false;
+  }
+
+  if (addr == nullptr) {
+    freeaddrinfo(res);
+    return true;
+  }
+
+  for (p = res; p != nullptr; p = p->ai_next) {
+    if (p->ai_family == AF_INET) {
+      struct sockaddr_in *ipv4 =
+          reinterpret_cast<struct sockaddr_in *>(p->ai_addr);
+      memcpy(addr, &ipv4->sin_addr, sizeof(in_addr_t));
+      freeaddrinfo(res);
+      return true;
+    }
+  }
+
+  freeaddrinfo(res);
+  return false;
 }
 
 MovingAverage::MovingAverage() : index_(0), count_(0), sum_(0) {

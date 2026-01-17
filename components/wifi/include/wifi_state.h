@@ -235,7 +235,7 @@ class WiFiIdleState : public WiFiState, public Singleton<WiFiIdleState> {
   void LogRSSI();
 
   int64_t next_log_at_ = 0;
-  bool client_started_ = false;
+  bool should_start_mqtt_ = true, client_started_ = false;
   bool temporary_exiting_ = false;
 };
 
@@ -316,7 +316,7 @@ class WiFiConnectionAbortState : public WiFiState,
   WiFiConnectionAbortState() : WiFiState(WiFiStateType::CONNECTION_ABORT) {}
 
   int64_t until_at_ = 0;
-  bool disconnected_ = false;
+  bool disconnect_called_ = false;
 };
 
 class WiFiWaitingForDefaultState

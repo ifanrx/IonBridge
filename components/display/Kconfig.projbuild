@@ -11,6 +11,9 @@ choice DISPLAY_DRIVER
         bool "LVGL"
         select ENABLE_BLE_AND_MQTT_MUTUAL_EXCLUSION
 
+    config DISPLAY_DRIVER_GPU
+        bool "GPU"
+
     config DISPLAY_DRIVER_NONE
         bool "None"
         help
@@ -19,52 +22,102 @@ choice DISPLAY_DRIVER
 endchoice
 
 config ANIMATION_FRAME_RATE
-    int "Animation frame rate"
-    default 6
-    range 1 30
+    int "Animation frame rate (FPS)"
+    default 60
+    range 1 120
     help
-        Animation frame rate(frame per second)
+        Animation frame rate in frames per second. Higher values provide smoother
+        animations but consume more CPU. Default is 60 FPS (16.667ms per frame).
+
+config ANIMATION_FONT_DIR
+    string "Animation Image Directory"
+    default "/littlefs/resources/fonts"
+    help
+        Directory where the animation fonts are stored.
 
 config ANIMATION_IMAGE_DIR
     string "Animation Image Directory"
     default "/littlefs/resources/images"
     help
-        Directory where the boot animation images are stored.
+        Directory where the animation images are stored.
+
+config ANIMATION_IMAGE_EXT
+    string "Animation Image File Extension"
+    default ".sqoi" if DISPLAY_DRIVER_LVGL
+    default ".bin"  if DISPLAY_DRIVER_GPU
+    default ".bin"  if DISPLAY_DRIVER_FPGA
+    default ".bin"
+    help
+        File extension for animation images.
+        - LVGL: .sqoi (compressed format via esp_lv_decoder)
+        - GPU:  .bin  (384-byte raw bitmap)
+        - FPGA: .bin  (not currently used)
 
 config BOOT_ANIMATION_PLAY_DURATION
     int "Boot Animation Play Duration(ms)"
+    default 3000
+    help
+        Duration in milliseconds for boot animation (FPGA: hardcoded segments, LVGL/GPU: animated images).
+
+config DEVICE_INFO_ANIMATION_PLAY_DURATION
+    int "Device Info Animation Play Duration(ms)"
     default 5000
     help
-        Duration in milliseconds for boot animation.
+        Duration in milliseconds for device info animation.
 
 config IDLE_ANIMATION_PLAY_DURATION
     int "Idle Animation Play Duration(ms)"
-    default 5000
+    default 30000
     help
         Duration in milliseconds for idle animation.
 
-config DEVICE_INSERTED_DISPLAY_DURATION
-    int "Device Inserted Display Duration(ms)"
-    default 5000
+config CODE_ANIMATION_PLAY_DURATION
+    int "Code Animation Play Duration(ms)"
+    default 60000
     help
-        Duration in milliseconds for device inserted display.
+        Duration in milliseconds for code animation.
 
-config DEVICE_REMOVED_DISPLAY_DURATION
-    int "Device Removed Display Duration(ms)"
-    default 5000
+config WIFI_CONNECTING_ANIMATION_PLAY_DURATION
+    int "WiFi Connecting Animation Play Duration(ms)"
+    default 6000
     help
-        Duration in milliseconds for device removed display.
+        Duration in milliseconds for wifi connecting animation.
 
-config DEVICE_POWER_DISPLAY_DURATION
-    int "Device Power Display Duration(ms)"
-    default 5000
+config DEVICE_INSERTED_ANIMATION_PLAY_DURATION
+    int "Device Inserted Animation Play Duration(ms)"
+    default 500
     help
-        Duration in milliseconds for device power display.
+        Duration in milliseconds for device inserted animation.
+
+config DEVICE_REMOVED_ANIMATION_PLAY_DURATION
+    int "Device Removed Animation Play Duration(ms)"
+    default 500
+    help
+        Duration in milliseconds for device removed animation.
+
+config POWER_CHART_ANIMATION_PLAY_DURATION
+    int "Power Chart Animation Play Duration(ms)"
+    default 60000
+    help
+        Duration in milliseconds for device power chart animation.
+
+config CHARGING_ANIMATION_PLAY_DURATION
+    int "Charging Animation Play Duration(ms)"
+    default 300000
+    help
+        Duration in milliseconds for charging animation.
 
 config DISPLAY_LOCK_TIMEOUT_MS
     int "Display Lock Timeout(ms)"
     default 1000
     help
         Timeout in milliseconds for display lock.
+
+config ENABLE_LVGL_MEMORY_MONITOR
+    bool "Enable LVGL Memory Monitor"
+    default n
+    help
+        Enable memory monitor for LVGL. This is useful for debugging memory issues in LVGL.
+        It will log memory usage statistics to the console during animation switch.
 
 endmenu

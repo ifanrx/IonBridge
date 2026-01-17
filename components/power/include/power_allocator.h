@@ -10,16 +10,13 @@
 #include "esp_err.h"
 #include "esp_timer.h"
 #include "freertos/idf_additions.h"
-#include "port_data.h"
 #include "port_manager.h"
-#include "ring_buffer.h"
 #include "strategy.h"
-
-using HistoricalStatsData = RingBuffer<PortStatsData>;
 
 enum TemperatureMode : uint8_t {
   POWER_PRIORITY = 0x00,
   TEMPERATURE_PRIORITY = 0x01,
+  MAX = 0x02
 };
 
 enum PowerAllocatorType : uint8_t {
@@ -30,13 +27,13 @@ enum PowerAllocatorType : uint8_t {
   ULTRA_SLOW_ALLOCATOR = 0x04,
   ULTRA_FAST_ALLOCATOR = 0x05,
   USBA_ALLOCATOR = 0x06,
+  HIGH_PERFORMANCE_ALLOCATOR = 0x07,
+  ULTRA_FAST_SINGLE_PORT_ALLOCATOR = 0x08,
 };
 
 enum class PowerAllocatorEventType {
   EXECUTE = (1 << 0),
-  PORT_ATTACHED = (1 << 1),
-  PORT_DETACHED = (1 << 2),
-  REALLOCATE = (1 << 3),
+  REALLOCATE = (1 << 1),
 };
 
 struct PowerAllocatorEvent {
@@ -49,7 +46,6 @@ class PowerAllocator {
   // Use smart pointers for automatic memory management
   std::unique_ptr<PowerStrategy> strategy_;
   std::unique_ptr<PowerStrategy> strategy_buffer_;
-  uint32_t cooldown_period_secs_;
   uint32_t apply_period_;
   esp_timer_handle_t timer_handle_;
   uint32_t timer_period_;
@@ -69,12 +65,13 @@ class PowerAllocator {
   esp_err_t Start();
   void Stop();
   void Execute();
-  bool IsRunning() const { return taskRunning_; }
-  void PortAttached(uint8_t port_id);
-  void PortDetached(uint8_t port_id);
+  bool IsRunning() const {
+    // Check both handle and running flag to support both test and production
+    return taskHandle_ != nullptr && taskRunning_;
+  }
+  bool IsStarted() const { return eventQueue_ != nullptr; }
   void Reallocate();
   void HighTempDetect();
-  bool OverTempLimitDetect();
   void ReducePowerBudget(uint8_t max_power, uint8_t decreasement,
                          uint8_t min_limit, const char *scenario);
   esp_err_t EnqueueEvent(PowerAllocatorEvent event);
@@ -82,8 +79,7 @@ class PowerAllocator {
   void ReportPowerStats();
   uint16_t AddApplyCount();
   void Configure(
-      PowerStrategy *strategy, uint32_t cooldown_period_secs,
-      uint32_t apply_period, uint32_t timer_period,
+      PowerStrategy *strategy, uint32_t apply_period, uint32_t timer_period,
       TemperatureMode temperature_mode = TemperatureMode::POWER_PRIORITY);
   bool IsConfigured() const { return configured_; }
 
@@ -95,15 +91,13 @@ class PowerAllocator {
                                   !std::is_abstract<T>::value>>
   void SetStrategy(Args &&...args) {
     // Ensure that the first argument is cooldown_period_secs_
-    strategy_buffer_ =
-        std::make_unique<T>(cooldown_period_secs_, std::forward<Args>(args)...);
+    strategy_buffer_ = std::make_unique<T>(std::forward<Args>(args)...);
   }
-  void SetCooldownPeriod(uint32_t cooldown_period_secs) {
-    cooldown_period_secs_ = cooldown_period_secs;
-    if (strategy_ != nullptr) {
-      strategy_->SetCooldownPeriod(cooldown_period_secs);
-    }
+  // Overload that accepts a unique_ptr directly
+  void SetStrategy(std::unique_ptr<PowerStrategy> strategy) {
+    strategy_buffer_ = std::move(strategy);
   }
+  void SetDefaultStrategy() { return SetStrategy<PowerSlowChargingStrategy>(); }
   bool SwitchStrategy();
   // Templated getter function using SFINAE
   template <typename T>
@@ -124,13 +118,28 @@ class PowerAllocator {
   StrategyType GetStrategyType() const { return strategy_->Type(); }
 
   PowerAllocatorType Type() const { return type_; }
+  esp_err_t Reset() {
+    SetDefaultStrategy();
+    return SetTemperatureMode(TemperatureMode::POWER_PRIORITY);
+  }
+
+  void SetDefaultTemperatureMode() {
+    SetTemperatureMode(TemperatureMode::POWER_PRIORITY);
+  }
 
   esp_err_t SetTemperatureMode(TemperatureMode mode);
   TemperatureMode GetTemperatureMode() const { return temperature_mode_; }
-
+  bool IsPowerAllocationEnabled() const { return power_allocation_enabled_; }
+  void EnablePowerAllocation() { power_allocation_enabled_ = true; }
   void DisablePowerAllocation() { power_allocation_enabled_ = false; }
   void GetAllocationData(uint16_t *power_budget,
                          uint16_t *remaining_power) const;
+
+  // Config sync support
+  void GetChargingConfig(StrategyType &type, uint16_t *identifier = nullptr,
+                         PowerAllocationTable *table = nullptr) const;
+  esp_err_t SetChargingConfig(StrategyType type, uint16_t identifier = 0,
+                              const PowerAllocationTable *table = nullptr);
 
   ~PowerAllocator() { Stop(); }
 
@@ -141,8 +150,8 @@ class PowerAllocator {
   static void TaskLoopWrapper(void *pvParameter);
   void TaskLoop();
   bool taskRunning_ = false;
-  QueueHandle_t eventQueue_;
-  TaskHandle_t taskHandle_;
+  QueueHandle_t eventQueue_ = nullptr;
+  TaskHandle_t taskHandle_ = nullptr;
 };
 
 class AllocatorBuilder {
@@ -150,7 +159,6 @@ class AllocatorBuilder {
   bool *ports_active_;
   uint32_t timer_period_;
   PowerStrategy *strategy_;
-  uint32_t cooldown_period_secs_;
   uint32_t apply_period_;
 
  public:
@@ -159,7 +167,6 @@ class AllocatorBuilder {
         ports_active_(nullptr),
         timer_period_(1000),
         strategy_(nullptr),
-        cooldown_period_secs_(1),
         apply_period_(1000) {}
 
   AllocatorBuilder &SetPortCount(uint8_t port_count) {
@@ -180,17 +187,12 @@ class AllocatorBuilder {
     return *this;
   }
 
-  AllocatorBuilder &SetCooldownPeriod(uint32_t cooldown_period_secs) {
-    cooldown_period_secs_ = cooldown_period_secs;
-    return *this;
-  }
-
   template <
       typename T, typename... Args,
       typename = std::enable_if_t<std::is_base_of<PowerStrategy, T>::value &&
                                   !std::is_abstract<T>::value>>
   AllocatorBuilder &SetStrategy(Args &&...args) {
-    strategy_ = new T(cooldown_period_secs_, std::forward<Args>(args)...);
+    strategy_ = new T(std::forward<Args>(args)...);
     return *this;
   }
 

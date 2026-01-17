@@ -1,151 +1,78 @@
 #ifndef NVS_DEFAULT_H_
 #define NVS_DEFAULT_H_
 
-#include <cstdint>
-#include <string>
+#include <type_traits>
 #include <unordered_map>
-#include <variant>
 
-enum class NVSKey {
-  // DEVICE DATA
-  DEVICE_SERIAL_NUMBER = 0,
-  DEVICE_PASSWORD,
-  DEVICE_NAME,
-  DEVICE_HARDWARE_REV,
-  DEVICE_PRODUCT_FAMILY,
-  DEVICE_PRODUCT_COLOR,
-  DEVICE_AES_KEY,
-  DEVICE_MODEL,
-  DEVICE_WIFI_MAC,
-  DEVICE_BLUETOOTH_MAC,
-  // CERTS
-  CA_CERT,
-  // MQTT
-  MQTT_CA_CERT,
-  MQTT_CERT,
-  MQTT_KEY,
-  MQTT_BROKER,
-  MQTT_CUSTOM_BROKER,
+#include "nvs_key.h"
 
-  // BLE-SERVICE
-  DEVICE_TOKEN,
+namespace nvs_wrapper {
+class DefaultValue {
+  const void *ptr;
+  size_t size;
 
-  // SYSLOG
-  SYSLOG_REPORT_STATE,
+ public:
+  // Template constructor for single values
+  template <typename T>
+  DefaultValue(const T &value)
+      : ptr(static_cast<const void *>(&value)), size(sizeof(T)) {}
+  // Template constructor for arrays
+  template <typename T, size_t N>
+  DefaultValue(const T (&array)[N])
+      : ptr(static_cast<const void *>(array)), size(sizeof(T) * N) {}
+  // Manual constructor
+  DefaultValue(const void *ptr, size_t size) : ptr(ptr), size(size) {}
 
-#ifdef CONFIG_ENABLE_RFTEST
-  // TEST MODE
-  TEST_MODE_A,
-#endif
+  template <typename T>
+  T as() const {
+    return *static_cast<const T *>(ptr);
+  }
 
-  // FPGA
-  FPGA_CONFIG,
-  FPGA_POWER_CONTROL,
-
-  // LICENSE
-  LICENSE,
-
-  // DISPLAY
-  DISPLAY_MODE,
-  DISPLAY_INTENSITY,
-  DISPLAY_FLIP,
-  DISPLAY_IDLE_ANIMATION,
-
-  // POWER
-  POWER_PORT_PRIORITY,
-  POWER_ALLOCATOR_ENABLED,
-  POWER_PORT0_CONFIG,
-  POWER_PORT1_CONFIG,
-  POWER_PORT2_CONFIG,
-  POWER_PORT3_CONFIG,
-  POWER_PORT4_CONFIG,
-  POWER_PORT5_CONFIG,
-  POWER_PORT6_CONFIG,
-  POWER_PORT7_CONFIG,
-  POWER_CONFIG,
-
-  // Wifi
-  WIFI_NUMBER,
-  WIFI_SSID_0,
-  WIFI_PASSWD_0,
-  WIFI_SSID_1,
-  WIFI_PASSWD_1,
-  WIFI_HASH,
-  WIFI_CREDENTIAL_1,
-  WIFI_CREDENTIAL_2,
-  WIFI_CREDENTIAL_3,
-  WIFI_CREDENTIAL_4,
-  WIFI_CREDENTIAL_5,
-  WIFI_CREDENTIAL_6,
-  WIFI_CREDENTIAL_7,
-  WIFI_CREDENTIAL_8,
-  WIFI_CREDENTIAL_9,
-  WIFI_CREDENTIAL_10,
-  WIFI_CREDENTIAL_11,
-  WIFI_CREDENTIAL_12,
-  WIFI_CREDENTIAL_13,
-  WIFI_CREDENTIAL_14,
-  WIFI_CREDENTIAL_15,
-  WIFI_CREDENTIAL_16,
-  WIFI_CREDENTIAL_17,
-  WIFI_CREDENTIAL_18,
-  WIFI_CREDENTIAL_19,
-  WIFI_CREDENTIAL_20,
-  WIFI_CREDENTIAL_21,
-  WIFI_CREDENTIAL_22,
-  WIFI_CREDENTIAL_23,
-  WIFI_CREDENTIAL_24,
-  WIFI_CREDENTIAL_25,
-  WIFI_CREDENTIAL_26,
-  WIFI_CREDENTIAL_27,
-  WIFI_CREDENTIAL_28,
-  WIFI_CREDENTIAL_29,
-  WIFI_CREDENTIAL_30,
-  WIFI_CREDENTIAL_31,
-  WIFI_CREDENTIAL_32,
-  WIFI_CREDENTIAL_33,
-  WIFI_CREDENTIAL_34,
-  WIFI_CREDENTIAL_35,
-  WIFI_CREDENTIAL_36,
-  WIFI_CREDENTIAL_37,
-  WIFI_CREDENTIAL_38,
-  WIFI_CREDENTIAL_39,
-  WIFI_CREDENTIAL_40,
-  WIFI_CREDENTIAL_41,
-  WIFI_CREDENTIAL_42,
-  WIFI_CREDENTIAL_43,
-  WIFI_CREDENTIAL_44,
-  WIFI_CREDENTIAL_45,
-  WIFI_CREDENTIAL_46,
-  WIFI_CREDENTIAL_47,
-  WIFI_CREDENTIAL_48,
-  WIFI_CREDENTIAL_49,
-  WIFI_CREDENTIAL_50,
-  WIFI_CREDENTIAL_51,
-  WIFI_CREDENTIAL_52,
-  WIFI_CREDENTIAL_53,
-  WIFI_CREDENTIAL_54,
-  WIFI_CREDENTIAL_55,
-  WIFI_CREDENTIAL_56,
-  WIFI_CREDENTIAL_57,
-  WIFI_CREDENTIAL_58,
-  WIFI_CREDENTIAL_59,
-  WIFI_CREDENTIAL_60,
-  WIFI_CREDENTIAL_61,
-  WIFI_CREDENTIAL_62,
-  WIFI_CREDENTIAL_63,
-  WIFI_CREDENTIAL_64,
-
-  OTA_CONFIRM_RESULT,
-
-  NVS_KEY_COUNT,
+  template <typename T>
+  const T *as_array(size_t &count) const {
+    count = size / sizeof(T);
+    return static_cast<const T *>(ptr);
+  }
 };
 
-std::string nvs_key_to_string(NVSKey key);
+class DefaultValueStore {
+ public:
+  // Unified getter method with template parameter
+  template <typename T>
+  static T Get(const Key &key) {
+    auto it = DEFAULT_VALUES.find(key);
+    if (it != DEFAULT_VALUES.end()) {
+      T result = it->second.as<T>();
+      return result;
+    }
+    return GetFallbackDefault<T>();
+  }
 
-// Use a variant to store both int and string
-using ConfigValue = std::variant<char *, uint8_t, uint8_t *, bool, std::string>;
+  // Array getter method
+  template <typename T>
+  static const T *GetArray(const Key &key, size_t &count) {
+    auto it = DEFAULT_VALUES.find(key);
+    if (it != DEFAULT_VALUES.end()) {
+      return it->second.as_array<T>(count);
+    }
+    count = 0;
+    return nullptr;
+  }
 
-// Define the default values for each key
-extern const std::unordered_map<NVSKey, ConfigValue> DEFAULT_CONFIG;
+ private:
+  static const std::unordered_map<Key, DefaultValue> DEFAULT_VALUES;
+
+  // Default value provider for different types
+  template <typename T>
+  static T GetFallbackDefault() {
+    if constexpr (std::is_integral_v<T>) {
+      return T{0};
+    } else if constexpr (std::is_same_v<T, bool>) {
+      return false;
+    } else {
+      static_assert(sizeof(T) == 0, "Unsupported type");
+    }
+  }
+};
+};  // namespace nvs_wrapper
 #endif

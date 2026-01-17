@@ -1,9 +1,0 @@
-idf_component_register(
-  SRCS
-  "mqtt_message.cpp"
-  INCLUDE_DIRS
-  "include"
-  REQUIRES
-  chip_data_types
-  port
-  utils)

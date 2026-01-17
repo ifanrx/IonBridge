@@ -12,11 +12,13 @@ idf_component_register(
   REQUIRES
   ${requires}
   PRIV_REQUIRES
+  chip_data_types
   display
   esp_app_format
   esp_partition
   esp_wifi
   espcoredump
+  license
   logging
   machine_info
   mqtt_app

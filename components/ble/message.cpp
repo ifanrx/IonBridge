@@ -2,9 +2,17 @@
 
 #include <sys/param.h>
 
+#include <cinttypes>
+#include <cstdint>
+#include <cstring>
+#include <vector>
+
 #include "app.h"
 #include "ble.h"
 #include "esp_log.h"
+#include "esp_log_buffer.h"
+#include "esp_log_level.h"
+#include "protocol.h"
 
 static const char *TAG = "Message";
 
@@ -31,7 +39,7 @@ void MessageHandler::handle_syn(Message &msg) {
 
   // Check if the app has the corresponding service in the BLE service scope
   App &app = App::GetInstance();
-  if (app.HasSrv(msg.getService(), ServiceScope::SERVICE_SCOPE_BLE)) {
+  if (app.HasBLESrv(msg.getService())) {
     ESP_LOGD(TAG, "Sync App Service: %d", msg.getService());
 
     // Clear the buffer if it is not empty
@@ -121,10 +129,10 @@ void MessageHandler::handle_ack(Message &msg) {
                            ESP_LOG_DEBUG);
 
   App &app = App::GetInstance();
-  if (app.HasSrv(msg.getService(), ServiceScope::SERVICE_SCOPE_BLE)) {
-    length = app.ExecSrvFromBle(msg.getService(), requestBuffer_.data(),
-                                requestBuffer_.size(), handler->data,
-                                MAX_MESSAGE_SIZE);
+  if (app.HasBLESrv(msg.getService())) {
+    length =
+        app.ExecBLESrv(msg.getService(), requestBuffer_.data(),
+                       requestBuffer_.size(), handler->data, MAX_MESSAGE_SIZE);
     sendResponse(msg, handler->data, length, BLE_FIN);
     ESP_LOGD(TAG, "BLE Message sent, service: 0x%02x, status: %d",
              msg.getService(), handler->data[0]);
@@ -187,7 +195,7 @@ void MessageHandler::sendResponse(Message &msg, const uint8_t *data,
 
 MessageFragHandler *MessageHandler::getHandlerById(uint8_t id) {
   for (int i = 0; i < MAX_CONCURRENT_CONN; i++) {
-    if (handlers_[i].free == false && handlers_[i].id == id) {
+    if (!handlers_[i].free && handlers_[i].id == id) {
       return &handlers_[i];
     }
   }
@@ -196,7 +204,7 @@ MessageFragHandler *MessageHandler::getHandlerById(uint8_t id) {
 
 MessageFragHandler *MessageHandler::getFreeHandler() {
   for (int i = 0; i < MAX_CONCURRENT_CONN; i++) {
-    if (handlers_[i].free == true) {
+    if (handlers_[i].free) {
       handlers_[i].free = false;  // mark the slot as used
       return &handlers_[i];
     }

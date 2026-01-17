@@ -7,8 +7,9 @@
 #include <string>
 
 #include "esp_err.h"
+#include "nvs_key.h"
 
-#define WIFI_SLOT_COUNT 64
+#define WIFI_SLOT_COUNT nvs_keys::WIFI_CREDENTIALS_SIZE
 
 typedef struct {
   char ssid[32];

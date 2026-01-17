@@ -19,6 +19,7 @@ extern "C" {
 #define BCAST_ADDR 0x0F
 #define FPGA_ADDR 0x0E
 #define ESP32_ADDR 0x0D
+#define GPU_ADDR 0x0C
 
 typedef struct __attribute__((packed)) {
   uint16_t preamble;

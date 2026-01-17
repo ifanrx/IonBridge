@@ -5,6 +5,10 @@ boto3==1.35.38
 rangehttpserver
 littlefs-python==0.10.3
 paho-mqtt
+protobuf
+grpcio-tools
 packaging
 pillow
 qoi-conv
+watchdog
+opencv-python

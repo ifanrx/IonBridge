@@ -101,6 +101,7 @@ esp_err_t MessageFactory::createMessage(const uint8_t *data, size_t dataLength,
   }
   if (!(*msg)->validate()) {
     ESP_LOGW(TAG, "Received invalid message");
+    delete *msg;
     return ESP_FAIL;
   }
   return ESP_OK;
@@ -161,7 +162,8 @@ bool Message::validate() {
   }
 
   uint8_t incoming_token = payload_[0], token;
-  ESP_RETURN_FALSE_ON_ERROR(NVSGetAuthToken(&token), "NVSGetAuthToken");
+  ESP_RETURN_FALSE_ON_ERROR(nvs_utils::GetBLEAuthToken(&token),
+                            "NVSGetAuthToken");
   bool valid = incoming_token == token;
   if (!valid) {
     ESP_LOGW(TAG, "Token mismatch, expected %d, got %d, service: %d", token,

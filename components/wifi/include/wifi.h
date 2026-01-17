@@ -4,6 +4,9 @@
 #include <stddef.h>
 
 #include <cstdint>
+#ifdef IONBRIDGE_WIFI_HOST_TEST
+#include <vector>
+#endif
 
 #include "esp_err.h"
 #include "sdkconfig.h"
@@ -71,6 +74,10 @@ class WiFiController {
   WiFiState *state_;
   WiFiStateContext *ctx_;
 
+#ifdef IONBRIDGE_WIFI_HOST_TEST
+  std::vector<WiFiStateType> state_history_;
+#endif
+
   void SetState(WiFiState *state);
 
  public:
@@ -105,9 +112,15 @@ class WiFiController {
     }
   };
 
-  bool ResolveAddress(const char *hostname);
+#ifdef IONBRIDGE_WIFI_HOST_TEST
+  std::vector<WiFiStateType> &GetStateHistory() { return state_history_; }
+#endif
 };
 
 extern WiFiController wifi_controller;
+
+#ifdef IONBRIDGE_WIFI_HOST_TEST
+void mock_wifi_initialize();
+#endif
 
 #endif  // !H_WIFI_

@@ -15,6 +15,8 @@
 #include "esp_check.h"
 #include "esp_err.h"
 #include "esp_log.h"
+#include "esp_log_buffer.h"
+#include "esp_log_level.h"
 #include "freertos/idf_additions.h"
 #include "freertos/portmacro.h"
 #include "freertos/projdefs.h"
@@ -86,17 +88,23 @@
 #define UART_MESSAGE_TO_ESP32(addr) (UART_MESSAGE_DST_ADDR(addr) == ESP32_ADDR)
 #define UART_MESSAGE_TO_FPGA(addr) (UART_MESSAGE_DST_ADDR(addr) == FPGA_ADDR)
 #define UART_MESSAGE_FROM_FPGA(addr) (UART_MESSAGE_SRC_ADDR(addr) == FPGA_ADDR)
+#define UART_MESSAGE_TO_GPU(addr) (UART_MESSAGE_DST_ADDR(addr) == GPU_ADDR)
+#define UART_MESSAGE_FROM_GPU(addr) (UART_MESSAGE_SRC_ADDR(addr) == GPU_ADDR)
 #define UART_MESSAGE_BROADCAST(addr) (UART_MESSAGE_DST_ADDR(addr) == BCAST_ADDR)
 #define UART_RESET_DATA "\x5A\xA5\x5A\xA5"
 
 #define UART_BUF_SIZE (UART_MESSAGE_MAX_SZ * 4)
 #define UART_TX_TARGET_IS_FPGA(addr) \
   (UART_MESSAGE_TO_FPGA(addr) || UART_MESSAGE_FROM_FPGA(addr))
-#define UART_TX_TARGET_INDEX(addr)                                             \
-  ((UART_TX_TARGET_IS_FPGA(addr)                                               \
-        ? (UART_TX_TARGETS - 1)                                                \
-        : (UART_MESSAGE_ADDR(addr) < UART_TX_TARGETS ? UART_MESSAGE_ADDR(addr) \
-                                                     : UART_TX_TARGETS - 1)))
+#define FPGA_TARGET_INDEX (UART_TX_TARGETS - 1)
+#define UART_TX_TARGET_IS_GPU(addr) \
+  (UART_MESSAGE_TO_GPU(addr) || UART_MESSAGE_FROM_GPU(addr))
+#define GPU_TARGET_INDEX (UART_TX_TARGETS - 2)
+#define UART_TX_TARGET_INDEX(addr)                        \
+  ((UART_TX_TARGET_IS_FPGA(addr)                          \
+        ? FPGA_TARGET_INDEX                               \
+        : (UART_TX_TARGET_IS_GPU(addr) ? GPU_TARGET_INDEX \
+                                       : UART_MESSAGE_ADDR(addr))))
 #define EXPECTED_RESPONSE(message, command) (message.command == command)
 
 #define LOG_UART_MESSAGE(tag, msg_ptr, level)                             \
@@ -303,8 +311,8 @@ static bool validate_uart_message(uart_message_t *message) {
           dst_addr = UART_MESSAGE_DST_ADDR(message->addr);
   ESP_LOGD(TAG, "Validating message from SRC 0x%X to DST 0x%X, command: 0x%04X",
            src_addr, dst_addr, message->command);
-  if (!(UART_MESSAGE_TO_ESP32(message->addr) ||
-        UART_MESSAGE_BROADCAST(message->addr))) {
+  if (!UART_MESSAGE_TO_ESP32(message->addr) &&
+      !UART_MESSAGE_BROADCAST(message->addr)) {
     ESP_LOGW(TAG, "Invalid message: 0x%X => 0x%X, command: 0x%04X", src_addr,
              dst_addr, message->command);
     LOG_UART_MESSAGE(TAG, message, ESP_LOG_WARN);
@@ -451,7 +459,11 @@ esp_err_t uart_init() {
 #else
       .source_clk = UART_SCLK_DEFAULT,
 #endif
-      .flags = {0},
+      .flags =
+          {
+              .allow_pd = 0,
+              .backup_before_sleep = 0,  // deprecated, same as allow_pd
+          },
   };
 
   ESP_RETURN_ON_ERROR(uart_param_config(UART_PORT_NUM, &uart_config), TAG,
@@ -516,7 +528,7 @@ esp_err_t encode_uart_message(const uart_message_t *message, uint8_t *data) {
   offset += sizeof(message->command);
   memcpy(data + offset, &message->length, sizeof(message->length));
   offset += sizeof(message->length);
-  memcpy(data + offset, &message->payload, message->length);
+  memcpy(data + offset, message->payload, message->length);
   offset += message->length;
   uint16_t checksum = htobe16(message->checksum);
   memcpy(data + offset, &checksum, sizeof(message->checksum));
@@ -674,6 +686,7 @@ RESENDING:
            "Resending message (command 0x%04X) to MCU 0x%X, attempt: "
            "%d/%d",
            command, mcu_addr, send_attempts, retry_limit);
+  DELAY_MS(1);  // yield to other tasks
   goto SENDING;
 EXIT:
   if (msg_data != NULL) {

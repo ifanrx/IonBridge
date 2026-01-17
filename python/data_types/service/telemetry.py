@@ -1,0 +1,36 @@
+#!/usr/bin/env python3
+# -*- coding=utf-8 -*-
+
+import enum
+
+
+class TelemetryCommand(enum.IntEnum):
+    PING = 0x00
+    COREDUMP_INFO = 0x01
+
+    DEVICE_BOOT_INFO = 0x10
+    DEVICE_STATS_DATA = 0x11
+
+    POWER_HISTORICAL_DATA = 0x30
+    POWER_ALLOCATION_DATA = 0x31
+    PD_PCAP_DATA = 0x32
+
+    # OTA
+    UPGRADE_DATA = 0x40
+
+    UART_METRICS_DATA = 0x50
+    SW3566_BOOTLOADER_INFO = 0x51
+
+    # alert
+    OUT_OF_MEMORY_ALERT = 0x60
+    OVER_TEMPERATURE_ALERT = 0x61
+    PD_CHARGING_ALERT = 0x62
+    ACDC_SELF_TEST_INFO = 0x63
+
+    TASK_EXECUTION_RESULT = 0x70
+
+    CONFIG_REPORT = 0x80
+    CONFIG_REQUEST = 0x81
+
+    PROGRAMMER_START = 0x90
+    PROGRAMMER_FINISH = 0x91

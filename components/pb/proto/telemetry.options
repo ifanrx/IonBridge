@@ -1,0 +1,4 @@
+pb.* proto3_singular_msgs:true
+pb.* enum_intsize:IS_8
+
+

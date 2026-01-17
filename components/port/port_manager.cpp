@@ -9,30 +9,35 @@
 #include <functional>
 #include <memory>
 
+#include "acdc.h"
+#include "data_types.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/idf_additions.h"
 #include "freertos/projdefs.h"
+#include "internal/sw3566_command_types.h"
 #include "port.h"
 #include "portmacro.h"
 #include "sdkconfig.h"
+#include "utils.h"
 
-#ifdef CONFIG_MCU_MODEL_SW3566
+#ifdef CONFIG_ENABLE_PROGRAMMER
+#include "firmware_programmer.h"
 #include "sw3566_data_types.h"
 #endif
+
 
 #ifdef CONFIG_INTERFACE_TYPE_UART
 #include <cinttypes>
 
 #include "esp_log_buffer.h"
 #include "esp_log_level.h"
-#include "telemetry_task.h"
 #include "uart.h"
+
 #endif
 
 #ifdef CONFIG_MCU_MODEL_FAKE_SW3566
 #include "rpc.h"
-#include "utils.h"
 #endif
 
 #define TASK_STACK_SIZE CONFIG_PORT_MANAGER_TASK_STACK_SIZE
@@ -41,6 +46,8 @@
   pdMS_TO_TICKS(CONFIG_PORT_MANAGER_EVENT_ENQUEUE_TIMEOUT_MS)
 #define EVENT_DEQUEUE_TIMEOUT \
   pdMS_TO_TICKS(CONFIG_PORT_MANAGER_EVENT_DEQUEUE_TIMEOUT_MS)
+#define UPGRADE_TASK_STACK_SIZE CONFIG_UPGRADE_TASK_STACK_SIZE
+#define UPGRADE_TASK_PRIORITY CONFIG_UPGRADE_TASK_PRIORITY
 
 #define ENSURE_PORT_ID(port_id, ...)                                      \
   do {                                                                    \
@@ -79,7 +86,7 @@ PortManager::~PortManager() {
   }
 }
 
-void PortManager::StartTask() {
+void PortManager::Start() {
   if (taskHandle_ != nullptr) {
     return;
   }
@@ -100,7 +107,9 @@ void PortManager::TaskLoopWrapper(void* pvParameters) {
 
 void PortManager::TaskLoop() {
   ESP_LOGI(TAG, "Starting PortManager");
+#ifndef CONFIG_MCU_MODEL_FAKE_SW3566
   PortManagerEvent event;
+#endif
   while (eventQueue_ != nullptr) {
 #ifndef CONFIG_MCU_MODEL_FAKE_SW3566
     // Wait indefinitely for any events to be posted to the queue
@@ -112,7 +121,7 @@ void PortManager::TaskLoop() {
           this->HandleUARTMessage(event);
         } break;
 #endif
-        case PortManagerEventType::TERMINATE_EVENT: {
+case PortManagerEventType::TERMINATE_EVENT: {
           ESP_LOGI(TAG, "Terminating PortManager");
           vTaskDelete(nullptr);
           return;
@@ -120,24 +129,25 @@ void PortManager::TaskLoop() {
       }
     } else {
       // timeout, update alive ports
-      for (Port& port : this->GetAlivePorts()) {
+      for (Port& port : *this) {
         port.Update();
       }
     }
+    DELAY_MS(1);  // Yield to other tasks
 #else
     for (Port& port : *this) {
       if (!port.IsInitialized()) {
         continue;
       }
       PortDetails details;
+      memset(&details, 0, sizeof(details));
       ClientPDStatus pd_status;
+      memset(&pd_status, 0, sizeof(pd_status));
       rpc::mcu::get_port_details(port.Id(), &details);
+      port.UpdateData(details);
       if (details.connected) {
-        port.UpdateData(details);
         rpc::mcu::get_pd_status(port.Id(), &pd_status);
         port.SetPDStatus(pd_status);
-      } else {
-        port.Reset();
       }
       port.Update();
     }
@@ -148,6 +158,15 @@ void PortManager::TaskLoop() {
   // Should never reach here
   ESP_LOGE(TAG, "PortManager event queue is null");
   vTaskDelete(nullptr);
+}
+
+void PortManager::Stop() {
+  PortManagerEvent event;
+  event.event_type = PortManagerEventType::TERMINATE_EVENT;
+  xQueueSend(eventQueue_, &event, EVENT_ENQUEUE_TIMEOUT);
+  for (Port& port : *this) {
+    port.Shutdown();
+  }
 }
 
 bool PortManager::InitializePort(uint8_t port_id, bool active,
@@ -171,6 +190,76 @@ uint16_t PortManager::GetPortsPowerUsage() const {
     }
   });
   return usage;
+}
+
+uint32_t PortManager::GetTotalOperatingPower() const {
+  uint32_t total_power_uw = 0;
+  this->ForEach([&total_power_uw](const Port& port) {
+    if (!port.Attached()) {
+      return;
+    }
+
+    ClientPDStatus pd_status = {};
+    port.GetPDStatus(&pd_status);
+
+    // PD negotiated power (voltage × current) takes priority
+    if (pd_status.operating_voltage > 0 && pd_status.operating_current > 0) {
+      uint32_t voltage_mv = pd_status.operating_voltage * 10;
+      uint32_t current_ma = pd_status.operating_current * 10;
+      total_power_uw += voltage_mv * current_ma;
+    } else {
+      // Fallback to measured power usage
+      total_power_uw += static_cast<uint32_t>(port.GetPowerUsage()) * 1000000;
+    }
+  });
+  return total_power_uw;
+}
+
+VoltageRequirements PortManager::GetVoltageRequirements() const {
+  VoltageRequirements req = {-1, false};
+
+  this->ForEach([&req](const Port& port) {
+    if (!port.Attached()) return;
+
+    PortDetails details = {};
+    port.GetDetails(&details);
+
+    // FC_NOT_CHARGING: truly idle, allow step-down
+    if (details.fc_protocol == FC_NOT_CHARGING) return;
+
+    // Has charging port - can't stay at -1
+    if (req.max_output_voltage_mv < 0) {
+      req.max_output_voltage_mv = 0;
+    }
+
+    int16_t voltage_mv = 0;
+
+    // Non-PD protocols (including FC_None): use measured voltage
+    if (details.fc_protocol < FC_PD_Fix5V) {
+      voltage_mv = details.vout_value;
+      if (voltage_mv > req.max_output_voltage_mv) {
+        req.max_output_voltage_mv = voltage_mv;
+      }
+      return;
+    }
+
+    // PD protocols: prefer operating_voltage
+    ClientPDStatus pd_status = {};
+    port.GetPDStatus(&pd_status);
+    voltage_mv = pd_status.operating_voltage * 10;
+
+    // Fallback to deterministic defaults if chip didn't report
+    if (voltage_mv == 0) {
+      voltage_mv = (details.fc_protocol == FC_PD_Fix5V) ? 5000 : 20000;
+    }
+
+    if (voltage_mv > req.max_output_voltage_mv) {
+      req.max_output_voltage_mv = voltage_mv;
+    }
+    req.has_pps_avs = req.has_pps_avs || pd_status.request_ppsavs;
+  });
+
+  return req;
 }
 
 uint8_t PortManager::GetPortsBitMask(PortPredicate predicate) const {
@@ -252,6 +341,10 @@ void PortManager::HandleUARTMessage(const PortManagerEvent& event) {
   if (port_id == BCAST_ADDR) {
     return HandleBroadcastMessage(uart_msg);
   }
+  if (port_id == GPU_ADDR) {
+    ESP_LOGD(TAG, "Ignoring GPU address UART message");
+    return;
+  }
 
   ENSURE_PORT_ID(port_id);
   Port* port = ports_[port_id].get();
@@ -260,6 +353,17 @@ void PortManager::HandleUARTMessage(const PortManagerEvent& event) {
     return;
   }
 
+#ifdef CONFIG_ENABLE_PROGRAMMER
+  // Check programmer mode first
+  FirmwareProgrammer& prog_mgr = FirmwareProgrammer::GetInstance();
+  if (prog_mgr.IsActivated()) {
+    // Forward ALL messages to FirmwareProgrammer
+    prog_mgr.HandleUARTMessage(uart_msg, port_id);
+    return;
+  }
+#endif
+
+  // Normal mode: handle all normal commands
   switch (uart_msg.command) {
     case SW3566Command::GET_PORT_DETAILS: {
       HandlePortDetailsMessage(*port, uart_msg);
@@ -278,9 +382,6 @@ void PortManager::HandleUARTMessage(const PortManagerEvent& event) {
     } break;
     case SW3566Command::KEEP_ALIVE: {
       HandleKeepAliveMessage(*port, uart_msg);
-    } break;
-    case SW3566Command::GET_PD_PCAP_DATA: {
-      HandlePDPCapDataMessage(*port, uart_msg);
     } break;
     default: {
       ESP_LOGW(TAG, "Unhandled UART command: 0x%04x from port %d",
@@ -315,6 +416,22 @@ void PortManager::HandlePortDetailsMessage(Port& port,
   size_t length = MIN(sizeof(PortDetailsResponse), uart_msg.length);
   memcpy(&response, uart_msg.payload, length);
 
+  // Detect abnormal session_charge values from MCU
+  uint64_t session_charge = response.details.session_charge;
+  if (session_charge > NEAR_OVERFLOW_THRESHOLD) {
+    ESP_LOGW(TAG,
+             "[Port %d] session_charge near overflow from MCU: 0x%" PRIx32
+             "%08" PRIx32 " µWs",
+             port.Id(), (uint32_t)(session_charge >> 32),
+             (uint32_t)session_charge);
+  } else if (session_charge > MAX_REASONABLE_SESSION_CHARGE) {
+    ESP_LOGW(TAG,
+             "[Port %d] Abnormal session_charge from MCU: 0x%" PRIx32
+             "%08" PRIx32 " µWs",
+             port.Id(), (uint32_t)(session_charge >> 32),
+             (uint32_t)session_charge);
+  }
+
   port.UpdateData(response.details);
   CheckAttachedPort(port);
 }
@@ -341,10 +458,10 @@ void PortManager::HandleInvalidCommandError(Port& port,
     return;
   }
   memcpy(&error, uart_msg.payload, length);
-  ESP_LOGW(
-      TAG,
-      "Invalid command error from port %d, raw command: 0x%04x, raw length: %d",
-      port.Id(), error.raw_command, error.raw_length);
+  ESP_LOGW(TAG,
+           "Invalid command error from port %d, raw command: 0x%04x, raw "
+           "length: %d",
+           port.Id(), error.raw_command, error.raw_length);
   // u16 command + u8 length + u8 marker
   ESP_LOG_BUFFER_HEXDUMP(
       TAG, error.raw_payload,
@@ -384,8 +501,12 @@ void PortManager::HandleChargingAlert(Port& port,
            static_cast<float>(alert.power_output * 3 * 8) / 1000000,
            alert.max_power, alert.watermark, alert.gpio_toggled,
            alert.rapid_reconnect);
-  ESP_LOGI(TAG, "Port[%d] requests voltage: %d", port.Id(),
-           alert.vin_voltage_request);
+
+  if (alert.gpio_toggled) {
+    // port shutoff by GPIO, entering checking state
+    port.Checking();
+    return;
+  }
 
   pd_rx_hard_reset_count_ += alert.pd_rx_hard_reset;
   pd_rx_error_count_ += alert.pd_rx_error;
@@ -402,47 +523,19 @@ void PortManager::HandleKeepAliveMessage(Port& port,
            port.Id(), resp.status, resp.uptimeMS, resp.rebootReason);
 }
 
-#ifdef CONFIG_MCU_MODEL_SW3566
-void PortManager::HandlePDPCapDataMessage(Port& port,
-                                          const uart_message_t& uart_msg) {
-  ESP_LOGD(TAG, "Received PD_PCAP_DATA from port %d", port.Id());
-
-  constexpr size_t fixed_size = sizeof(PcapEntry);
-  if (uart_msg.length < fixed_size) {
-    ESP_LOGE(TAG, "Invalid PD_PCAP_DATA length: %d", uart_msg.length);
-    return;
-  }
-  ESP_LOG_BUFFER_HEXDUMP(TAG, uart_msg.payload, uart_msg.length, ESP_LOG_DEBUG);
-
-#ifndef CONFIG_IDF_TARGET_LINUX
-  ESP_LOGD(TAG, "UART msg len: %d, header len: %d, payload len: %d",
-           uart_msg.length, fixed_size, uart_msg.length - fixed_size);
-#endif
-
-  PcapEntry* entry = static_cast<PcapEntry*>(malloc(uart_msg.length));
-  memcpy(entry, uart_msg.payload, uart_msg.length);
-  ESP_LOGD(TAG,
-           "PcapEntry - ts: %d, dir: %d, sop: %d, ser: %d, len: %d, vout: %d, "
-           "iout: %d",
-           entry->timestamp, entry->header.direction, entry->header.sop,
-           entry->header.serial, entry->length, entry->vout, entry->iout);
-  TelemetryTask& task = TelemetryTask::GetInstance();
-  task.ReportPDPCapData(port.Id(), *entry);
-  free(entry);
-}
-#endif
 #endif
 
 void PortManager::CheckAttachedPort(const Port& port) {
-  if (port.Attached()) {
-    charging_at_ = std::min(port.AttachedAtMS(), charging_at_);
-    attaced_ports_ |= (1 << port.Id());
-  } else {
+  if (!port.Attached()) {
     attaced_ports_ &= ~(1 << port.Id());
+    return;
   }
-  if (attaced_ports_ == 0) {
-    ESP_LOGD(TAG, "No ports attached");
-    charging_at_ = -1;
+
+  bool is_new_attach = !(attaced_ports_ & (1 << port.Id()));
+  charging_at_ = std::min(port.AttachedAtMS(), charging_at_);
+  attaced_ports_ |= (1 << port.Id());
+  if (is_new_attach) {
+    request_highest_voltage();
   }
 }
 

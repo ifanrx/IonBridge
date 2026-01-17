@@ -84,6 +84,7 @@ static void ble_msg_task(void *arg);
 static BLE_ADV_STATE handle_ble_adv_start();
 static BLE_ADV_STATE handle_ble_adv_stop();
 static BLE_ADV_STATE handle_ble_adv_delay_start(int interval_ms);
+static bool start_ble_adv();
 
 void ServerCallbacks::onConnect(NimBLEServer *pServer,
                                 NimBLEConnInfo &connInfo) {
@@ -111,9 +112,9 @@ void ServerCallbacks::onConnect(NimBLEServer *pServer,
   deviceConnected = true;
 
   peerMTU = pServer->getPeerMTU(connHandle);
-  ESP_LOGI(TAG, "Peer MTU: %d", peerMTU);
-  DisplayManager::GetInstance().SetAnimation(AnimationType::BLE_CONNECTED,
-                                             true);
+  ESP_LOGD(TAG, "Peer MTU: %d", peerMTU);
+  DisplayManager::GetInstance().SetNextAnimation(AnimationType::BLE_CONNECTED,
+                                                 true);
 }
 
 void ServerCallbacks::onDisconnect(NimBLEServer *pServer,
@@ -126,14 +127,13 @@ void ServerCallbacks::onDisconnect(NimBLEServer *pServer,
   ESP_LOGD(TAG, "MTU size: %d bytes", connInfo.getMTU());
   deviceConnected = false;
   clientAddress.clear();
-  DisplayManager::GetInstance().SetAnimation(AnimationType::IDLE_ANIMATION,
-                                             true);
+  DisplayManager::GetInstance().StopAnimation(AnimationType::BLE_CONNECTED);
 }
 
 void ServerCallbacks::onMTUChange(uint16_t mtu, NimBLEConnInfo &connInfo) {
   NimBLEServer *pServer = NimBLEDevice::getServer();
   uint16_t connHandle = connInfo.getConnHandle();
-  ESP_LOGI(TAG, "MTU updated: %u for connection ID: %u", mtu, connHandle);
+  ESP_LOGD(TAG, "MTU updated: %u for connection ID: %u", mtu, connHandle);
   peerMTU = mtu;
   pServer->updateConnParams(connHandle, 0x20, 0x40, 0, connTimeout);
 }
@@ -228,15 +228,6 @@ esp_err_t ble_init() {
   if (NimBLEDevice::isInitialized()) {
     return ESP_OK;
   }
-
-#ifdef CONFIG_ENABLE_BLE_AND_MQTT_MUTUAL_EXCLUSION
-  if (wifi_controller.GetStateType() == WiFiStateType::IDLE) {
-    wifi_controller.Notify(WiFiEventType::ABORT);
-    // WiFi abort handling will initialize BLE separately,
-    // so return error to avoid duplicate initialization
-    return ESP_ERR_INVALID_STATE;
-  }
-#endif
 
   esp_err_t __attribute__((unused)) ret;
   deviceConnected = false;
@@ -519,15 +510,10 @@ BLE_ADV_STATE handle_ble_adv_start() {
   }
 
   // start advertising indefinitely
-  wifi_controller.Notify(WiFiEventType::STOP_WEB_SERVER);
-  if (ble_init() != ESP_OK || !pServer->startAdvertising()) {
+  if (!start_ble_adv()) {
     ESP_LOGE(TAG, "Failed to start advertising");
-    wifi_controller.Notify(WiFiEventType::START_WEB_SERVER);
     return bleAdvCurrState;
   }
-
-  DisplayManager::GetInstance().SetAnimation(AnimationType::BLE_ADVERTISING,
-                                             true);
   return BLE_ADV_START;
 }
 
@@ -559,8 +545,7 @@ BLE_ADV_STATE handle_ble_adv_stop() {
   }
 
   wifi_controller.Notify(WiFiEventType::START_WEB_SERVER);
-  DisplayManager::GetInstance().SetAnimation(AnimationType::IDLE_ANIMATION,
-                                             true);
+  DisplayManager::GetInstance().StopAnimation(AnimationType::BLE_ADVERTISING);
   return BLE_ADV_STOP;
 }
 
@@ -584,13 +569,31 @@ BLE_ADV_STATE handle_ble_adv_delay_start(int interval_ms) {
     return new_state;
   }
 
-  wifi_controller.Notify(WiFiEventType::STOP_WEB_SERVER);
-  if (!(ble_init() == ESP_OK && pServer->startAdvertising())) {
-    ESP_LOGE(TAG, "Failed to start advertising");
-    wifi_controller.Notify(WiFiEventType::START_WEB_SERVER);
+  if (!start_ble_adv()) {
+    ESP_LOGE(TAG, "Failed to start advertising after delay %dms", interval_ms);
+    adv_start_at += interval_ms * 1000;
     return new_state;
   }
 
   // Keep advertising indefinitely, so return to BLE_ADV_START state
   return BLE_ADV_START;
+}
+
+bool start_ble_adv() {
+  wifi_controller.Notify(WiFiEventType::STOP_WEB_SERVER);
+#ifdef CONFIG_ENABLE_BLE_AND_MQTT_MUTUAL_EXCLUSION
+  if (wifi_controller.GetStateType() == WiFiStateType::IDLE) {
+    wifi_controller.Abort();
+    DELAY_MS(5000);
+  }
+#endif
+
+  bool started = ble_init() == ESP_OK && pServer->startAdvertising();
+  if (started) {
+    DisplayManager::GetInstance().SetNextAnimation(
+        AnimationType::BLE_ADVERTISING, true);
+  } else {
+    wifi_controller.Notify(WiFiEventType::START_WEB_SERVER);
+  }
+  return started;
 }

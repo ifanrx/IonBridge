@@ -7,4 +7,5 @@ idf_component_register(
   esp_common
   PRIV_REQUIRES
   nvs_data
+  utils
   version)

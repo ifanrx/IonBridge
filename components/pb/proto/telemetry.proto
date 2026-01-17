@@ -1,0 +1,37 @@
+syntax = "proto3";
+
+package pb;
+
+import "data_types.proto";
+
+message TelemetryData {
+    oneof data {
+        PingInfo ping_info = 1;
+        CoredumpPartitionSlice coredump_slice = 2;
+
+        DeviceBootInfo device_boot_info = 10;
+        DeviceStatsData device_stats_data = 11;
+
+        PowerHistoricalData power_historical_data = 30;
+        PowerAllocationData power_allocation_data = 31;
+        PDPCapData pdp_cap_data = 32;
+
+        UpgradeData upgrade_data = 40;
+
+        UartMetricsData uart_metrics_data = 50;
+        SW3566BootloaderInfo sw3566_bootloader_info = 51;
+
+        OutOfMemoryAlertInfo out_of_memory_alert_info = 60;
+        OverTemperatureAlertInfo over_temperature_alert_info = 61;
+        ChargingAlertInfo charging_alert_info = 62;
+        ACDCSelfTestInfo acdc_self_test_info = 63;
+
+        TaskExecutionResult task_execution_result = 70;
+
+        ConfigReport config_report = 80;
+        ConfigRequest config_request = 81;
+
+        ProgrammerStart programmer_start = 90;
+        ProgrammerFinish programmer_finish = 91;
+    }
+}

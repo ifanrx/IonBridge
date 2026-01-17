@@ -9,4 +9,5 @@ idf_component_register(
   PRIV_REQUIRES
   esp_wifi
   machine_info
-  nvs_data)
+  nvs_data
+  utils)

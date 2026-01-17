@@ -5,15 +5,19 @@ idf_component_register(
   INCLUDE_DIRS
   "include"
   REQUIRES
+  app
   esp_timer
   mqtt
+  service
+  pb
   PRIV_REQUIRES
-  app
   ble
+  config_sync
+  controller
   esp_wifi
   machine_info
-  mqtt_message
   nvs_data
+  storage
   task
   utils
   wifi)

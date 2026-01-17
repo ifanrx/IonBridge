@@ -2,7 +2,10 @@
 
 #include <sys/types.h>
 
+#include <algorithm>
+#include <array>
 #include <cstdint>
+#include <cstring>
 
 #include "display_manager.h"
 #include "esp_check.h"
@@ -15,6 +18,7 @@
 #include "esp_timer.h"
 #include "ionbridge.h"
 #include "machine_info.h"
+#include "nvs_key.h"
 #include "nvs_namespace.h"
 #include "port.h"
 #include "port_manager.h"
@@ -65,7 +69,9 @@ DeviceController::DeviceController() {
 }
 
 static void save_confirm_result(bool success) {
-  ConfirmResult confirm_result = {.success = success};
+  ConfirmResult confirm_result = {};
+  confirm_result.success = success;
+
 #if defined(CONFIG_MCU_MODEL_SW3566) || defined(CONFIG_MCU_MODEL_FAKE_SW3566)
   std::array<uint8_t, 3> bp_version =
       MachineInfo::GetInstance().GetMCUVersion();
@@ -81,13 +87,13 @@ static void save_confirm_result(bool success) {
   std::copy(esp32_version.begin(), esp32_version.end(),
             confirm_result.esp32_version);
   ESP_ERROR_COMPLAIN(
-      OTANVSSet(reinterpret_cast<uint8_t *>(&confirm_result),
-                NVSKey::OTA_CONFIRM_RESULT, sizeof(ConfirmResult)),
+      nvs_namespace::user_data::OTA.Set(
+          nvs_keys::OTA_CONFIRM_RESULT,
+          reinterpret_cast<uint8_t *>(&confirm_result), sizeof(ConfirmResult)),
       "Failed to save OTA confirm result");
 }
 
 esp_err_t DeviceController::confirm() {
-  ESP_LOGI(TAG, "Confirming OTA");
   esp_err_t ret = ESP_OK;
   uint8_t running_partition_hash[HASH_LENGTH];
   const esp_partition_t *partition = esp_ota_get_running_partition();
@@ -95,7 +101,7 @@ esp_err_t DeviceController::confirm() {
                     ROLLBACK, TAG, "esp_partition_get_sha256");
   ESP_GOTO_ON_ERROR(esp_ota_mark_app_valid_cancel_rollback(), ROLLBACK, TAG,
                     "esp_ota_mark_app_valid_cancel_rollback");
-  ESP_LOGI(TAG, "OTA confirmed, powering up");
+  ESP_LOGD(TAG, "OTA confirmed, powering up");
   save_confirm_result(true);
   status_ = DeviceControllerStatus::POWER_UP;
   return ret;
@@ -118,10 +124,7 @@ void DeviceController::set_upgrading(bool upgrading) {
   if (upgrading_) {
     PowerAllocator &allocator = PowerAllocator::GetInstance();
     PortManager &pm = PortManager::GetInstance();
-    pm.ForEach([](Port &port) {
-      port.Shutdown();
-      return true;
-    });
+    pm.Stop();
     allocator.Stop();
   }
 }

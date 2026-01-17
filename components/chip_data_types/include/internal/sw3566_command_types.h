@@ -11,7 +11,7 @@ typedef enum {
   // General Operations
   DEFINE_SW3566_COMMAND(KEEP_ALIVE, 0, 0x00),
   DEFINE_SW3566_COMMAND(BOOT, 2, 0x02),
-
+  // 功率分配相关
   DEFINE_SW3566_COMMAND(SET_SUBSCRIPTIONS, 26, 0x1A),
   DEFINE_SW3566_COMMAND(SET_MAX_POWER_BUDGET, 27, 0x1B),
   DEFINE_SW3566_COMMAND(GET_MAX_POWER_BUDGET, 28, 0x1C),
@@ -21,19 +21,19 @@ typedef enum {
   DEFINE_SW3566_COMMAND(GET_PD_STATUS, 34, 0x22),
   DEFINE_SW3566_COMMAND(SET_POWER_FEATURES, 35, 0x23),
   DEFINE_SW3566_COMMAND(GET_POWER_FEATURES, 36, 0x24),
+  DEFINE_SW3566_COMMAND(SET_CUSTOM_PDO_VOLTAGE, 37, 0x25),
   DEFINE_SW3566_COMMAND(SYSTEM_FLAGS, 48, 0x30),
   DEFINE_SW3566_COMMAND(GET_PD_PCAP_DATA, 192, 0xC0),
+
+  // 3566 programmer commands
+  DEFINE_SW3566_COMMAND(PROGRAMMER_START_CMD, 240, 0xF0),
+  DEFINE_SW3566_COMMAND(PROGRAMMER_DONE_CMD, 241, 0xF1),
+  DEFINE_SW3566_COMMAND(PROGRAMMER_ERROR_CMD, 242, 0xF2),
 
   // Exceptions
   DEFINE_SW3566_COMMAND(INVALID_COMMAND, 255, 0xFF),
   DEFINE_SW3566_COMMAND(UNCORRECTABLE, 65280, 0xFF00),
 } SW3566Command;
-
-typedef enum {
-  BOOTLOADER_ALIVE,
-  USER_APPLICATION_ALIVE,
-  USER_APPLICATION_SAFE_MODE
-} KeepAliveStatus;
 
 typedef enum {
   OK = 0,
@@ -43,6 +43,12 @@ typedef enum {
 typedef struct {
   uint8_t nonce;
 } KeepAliveRequest;
+
+typedef enum {
+  BOOTLOADER_ALIVE,
+  USER_APPLICATION_ALIVE,
+  USER_APPLICATION_SAFE_MODE
+} KeepAliveStatus;
 
 typedef struct __attribute__((packed)) {
   uint8_t nonce;
@@ -79,6 +85,40 @@ typedef struct __attribute__((packed)) {
 typedef struct {
   GenericStatus status;
 } SetSubscriptionsResponse;
+
+typedef struct {
+  uint8_t nonce;
+} GetFastChargingProtocolRequest;
+
+typedef struct __attribute__((packed)) {
+  GenericStatus status;
+  FastChargingProtocol protocol;
+} GetFastChargingProtocolResponse;
+
+typedef struct {
+  uint8_t nonce;
+} GetUpTimeRequest;
+
+typedef struct {
+  uint32_t upTimeMS;
+} GetUpTimeResponse;
+
+typedef struct {
+  uint8_t nonce;
+} GetPortStateRequest;
+
+typedef struct {
+  GenericStatus status;
+  bool connected;
+} GetPortStateResponse;
+
+typedef struct {
+  uint32_t unlock_keys[4];
+} UnlockBootloaderRequest;
+
+typedef struct {
+  GenericStatus status;
+} UnlockBootloaderResponse;
 
 typedef struct __attribute__((packed)) {
   bool shutdown;
@@ -148,12 +188,33 @@ typedef struct __attribute__((packed)) {
 } GetMaxPowerBudgetResponse;
 
 typedef struct __attribute__((packed)) {
-  uint8_t commit;
-  bool unused0 : 1;
-  bool port_type : 1;
-  bool enable_cable_compensation : 1;
-  uint8_t cable_compensation : 1;
-  uint8_t fixed_voltage_offset : 2;
+  uint8_t nonce;
+  uint16_t voltage_mv;
+} SetCustomPdoVoltageRequest;
+
+typedef struct {
+  GenericStatus status;
+} SetCustomPdoVoltageResponse;
+
+enum class CableCompensation : uint8_t {
+  VALUE_100MOHM = 0,
+  VALUE_65MOHM = 1,
+};
+
+enum class FixedVoltageOffset : uint8_t {
+  OFFSET_0MV = 0,
+  OFFSET_100MV = 1,
+  OFFSET_150MV = 2,
+  OFFSET_200MV = 3,
+};
+
+typedef struct __attribute__((packed)) {
+  uint8_t commit;  // Must be 0x55 to commit, otherwise return current value
+  bool enable_flash_cache : 1;  // default is true
+  bool port_type : 1;           // 0 - Type A, 1 - Type C, default is Type C
+  bool enable_cable_compensation : 1;  // default is true
+  uint8_t cable_compensation : 1;  // 0 - 100mOhm, 1 - 65mOhm, default is 65mOhm
+  uint8_t fixed_voltage_offset : 2;  // 0 - 0mV, 1 - 100mV, 2 - 150mV, 3 - 200mV
   uint8_t unused : 2;
 } SystemFlags;
 

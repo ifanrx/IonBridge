@@ -1,14 +1,15 @@
 #ifndef FAKE_SW3566_DATA_TYPES_H_
 #define FAKE_SW3566_DATA_TYPES_H_
 
-#include "sdkconfig.h"
 #include "internal/sw3566_command_types.h"  // IWYU pragma: export
+#include "sdkconfig.h"
 
 #define FAKE_SW3566_IS_TYPE_A(addr) (addr == (CONFIG_FAKE_SW3566_TYPE_A_PORT))
 #define FAKE_SW3566_MAX_POWER (CONFIG_FAKE_SW3566_MAX_POWER)
 #define FAKE_SW3566_MIN_POWER (CONFIG_FAKE_SW3566_MIN_POWER)
-#define FAKE_SW3566_MAX_CAP(addr) \
-  (FAKE_SW3566_IS_TYPE_A(addr) ? (CONFIG_FAKE_SW3566_TYPE_A_MAX_POWER) : FAKE_SW3566_MAX_POWER)
+#define FAKE_SW3566_MAX_CAP(addr)                                      \
+  (FAKE_SW3566_IS_TYPE_A(addr) ? (CONFIG_FAKE_SW3566_TYPE_A_MAX_POWER) \
+                               : FAKE_SW3566_MAX_POWER)
 #define FAKE_SW3566_MIN_CAP(addr) (FAKE_SW3566_MIN_POWER)
 
 #endif

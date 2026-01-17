@@ -2,43 +2,53 @@
 
 #include <cstdint>
 
+#include "animation_data_source.h"
+#include "animation_manager.h"
+#include "display_manager.h"
 #include "esp_err.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "ionbridge.h"
 #include "port.h"
-#include "power_allocator.h"
 #include "rpc.h"
 #include "sdkconfig.h"
-#include "utils.h"
 
 #ifdef CONFIG_MCU_MODEL_SW3566
 #include "esp_check.h"
 #include "sw3566_data_types.h"
 #endif
 
-#define PORT_CHECKING_TIMER_MS CONFIG_PORT_CHECKING_TIMER_MS
-
 static const char *TAG = "PortState";
 
-void PortActiveState::Handle(Port &port) {
-  if (port.Attached()) {
-    port.SetState(PortStateType::ATTACHED);
-    PowerAllocator::GetInstance().EnqueueEvent(
-        PowerAllocatorEventType::PORT_ATTACHED, port.Id());
-  }
+#define UPGRADE_TASK_STACK_SIZE CONFIG_UPGRADE_TASK_STACK_SIZE
+#define UPGRADE_TASK_PRIORITY CONFIG_UPGRADE_TASK_PRIORITY
+
+void PortAttachedState::Entering(Port &port) {
+  AnimationDataSource::SetLastInsertedPortId(port.Id());
+  DisplayManager::GetInstance().SetNextAnimation(AnimationType::DEVICE_INSERTED,
+                                                 false);
 }
 
-void PortAttachedState::Handle(Port &port) {
-  if (!port.Attached()) {
-    ESP_LOGD(TAG, "Port %d is detached", port.Id());
-    port.UnsubscribePDPcapStreaming();
-    port.Reset();
-    port.SetState(PortStateType::ACTIVE);
-    PowerAllocator::GetInstance().EnqueueEvent(
-        PowerAllocatorEventType::PORT_DETACHED, port.Id());
-  }
+void PortAttachedState::Exiting(Port &port) {
+  // Notify animation to detect port change immediately
+  AnimationManager::GetInstance().NotifyUpdate();
 }
+
+void PortDetachingState::Entering(Port &port) { port.StartDetachingTimer(); }
+
+void PortDetachingState::Handle(Port &port) {
+  // Check if device reconnected during debounce window
+  if (port.IsConnected()) {
+    ESP_LOGI(TAG,
+             "Port %d: Device reconnected during detaching, reverting to "
+             "ATTACHED",
+             port.Id());
+    port.SetState(PortStateType::ATTACHED);
+  }
+  // Otherwise wait for timer to expire
+}
+
+void PortDetachingState::Exiting(Port &port) { port.StopDetachingTimer(); }
 
 void PortInactiveState::Handle(Port &port) {
   // update port historical data while port is inactive
@@ -48,7 +58,7 @@ void PortInactiveState::Handle(Port &port) {
 void PortOpeningState::Handle(Port &port) {
   esp_err_t err = rpc::mcu::port_connect(port.Id());
   if (err != ESP_OK) {
-    ESP_ERROR_COMPLAIN(err, "Unable to turn on port %d", port.Id());
+    ESP_LOGW(TAG, "Unable to turn on port %d, error: 0x%04X", port.Id(), err);
     port.SetState(PortStateType::CHECKING);
     return;
   }
@@ -60,7 +70,7 @@ void PortOpeningState::Handle(Port &port) {
 void PortClosingState::Handle(Port &port) {
   esp_err_t err = rpc::mcu::port_disconnect(port.Id());
   if (err != ESP_OK) {
-    ESP_ERROR_COMPLAIN(err, "Unable to turn off port %d", port.Id());
+    ESP_LOGW(TAG, "Unable to turn off port %d, error: 0x%04X", port.Id(), err);
     port.SetState(PortStateType::CHECKING);
     return;
   }
@@ -161,13 +171,12 @@ DEAD:
 }
 
 void PortCheckingState::Entering(Port &port) {
-  StopWatchdog();
-  enter_time_ = esp_timer_get_time();
-  StartWatchdog(port);
+  port.StopCheckingWatchdog();
+  port.StartCheckingWatchdog();
 }
 
 void PortCheckingState::Handle(Port &port) {
-  if (port.UpdatedAt() > enter_time_) {
+  if (port.UpdatedAt() > port.CheckingAt()) {
     // Seems the port is still alive, revert to previous state
     port.RevertToPreviousState();
     return;
@@ -175,76 +184,6 @@ void PortCheckingState::Handle(Port &port) {
   // Do nothing, wait for the port to be updated or timer to be executed
 }
 
-void PortCheckingState::Exiting(Port &port) {
-  StopWatchdog();
-  enter_time_ = -1;
-}
+void PortCheckingState::Exiting(Port &port) { port.StopCheckingWatchdog(); }
 
-void PortCheckingState::StartWatchdog(Port &port) {
-  if (checking_timer_ != nullptr) {
-    ESP_LOGW(TAG, "Port watchdog has already started for port %d.", port.Id());
-    return;
-  }
-  const esp_timer_create_args_t timer_args = {
-      .callback = WatchdogCallback,
-      .arg = (void *)&port,
-      .dispatch_method = ESP_TIMER_TASK,
-      .name = "port_watchdog",
-      .skip_unhandled_events = true,
-  };
-  esp_err_t err = esp_timer_create(&timer_args, &checking_timer_);
-  if (err != ESP_OK) {
-    ESP_LOGE(TAG, "Failed to create port watchdog timer: %s",
-             esp_err_to_name(err));
-    return;
-  }
-  err = esp_timer_start_once(checking_timer_, PORT_CHECKING_TIMER_MS * 1000);
-  ESP_LOGD(TAG, "Port watchdog has started for port %d.", port.Id());
-}
-
-void PortCheckingState::StopWatchdog() {
-  if (checking_timer_ != nullptr) {
-    esp_timer_stop(checking_timer_);
-    esp_timer_delete(checking_timer_);
-    DELAY_MS(50);
-    checking_timer_ = nullptr;
-    ESP_LOGD(TAG, "Port watchdog stopped");
-  }
-}
-
-void PortCheckingState::WatchdogCallback(void *arg) {
-#ifdef CONFIG_MCU_MODEL_SW3566
-  Port *port = (Port *)arg;
-  // Send the keep-alive message to the port
-  KeepAliveStatus status;
-  uint32_t uptime_ms;
-  uint32_t reboot_reason;
-  esp_err_t ret = ESP_OK;
-  ESP_LOGD(TAG, "Port %d watchdog callback started.", port->Id());
-  for (int i = 0; i < 3; i++) {
-    ret = rpc::mcu::keep_alive(port->Id(), &status, &uptime_ms, &reboot_reason);
-    if (ret == ESP_OK) {
-      break;
-    }
-    DELAY_MS(20);
-  }
-  if (ret != ESP_OK) {
-    ESP_LOGW(TAG, "Port %d keep-alive failed: %d, recovering", port->Id(), ret);
-    port->SetState(PortStateType::RECOVERING);
-    return;
-  }
-  if (status == KeepAliveStatus::USER_APPLICATION_ALIVE) {
-    // Port is still alive, revert to previous state
-    port->RevertToPreviousState();
-    return;
-  }
-  if (status == KeepAliveStatus::BOOTLOADER_ALIVE) {
-    ESP_LOGW(TAG,
-             "Port %d is in bootloader, uptime: %" PRIu32
-             "ms, reboot_reason: 0x%" PRIx32,
-             port->Id(), uptime_ms, reboot_reason);
-    port->Reboot();
-    return;
-  }
-#endif
-}
+void PortDeadState::Entering(Port &port) { port.Reset(); }

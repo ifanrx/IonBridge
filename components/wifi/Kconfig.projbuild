@@ -25,6 +25,13 @@ config IONBRIDGE_WIFI_DEFAULT_PASSWORD
     help
         The default Wi-Fi password to use when connecting to an AP.
 
+config IONBRIDGE_WIFI_FACTORY_SSID_PREFIX
+    string "Factory Wi-Fi SSID prefix for DM animation"
+    default "ifanr-factory-"
+    help
+        SSIDs starting with this prefix will trigger the factory
+        Data Matrix animation when detected in scan results.
+
 config ESP_WIFI_SCAN_LIST_SIZE
     int "Max size of scan list"
     range 0 20
@@ -192,5 +199,26 @@ config WIFI_MAX_ENTRY
     default 32
     help
         The maximum number of Wi-Fi entries that can be stored.
+
+config ENABLE_WIFI_LAB_TEST
+    bool "Enable Wi-Fi Lab Test"
+    default n
+    help
+        Enable Wi-Fi Lab Test.
+
+config WIFI_LAB_TEST_SSID
+    string "Wi-Fi Lab Test SSID"
+
+    default "CMW-AP"
+    depends on ENABLE_WIFI_LAB_TEST
+    help
+        The SSID of the Wi-Fi Lab Test network.
+
+config WIFI_LAB_TEST_PASSWD
+    string "Wi-Fi Lab Test Password"
+    default "12345678"
+    depends on ENABLE_WIFI_LAB_TEST
+    help
+        The password of the Wi-Fi Lab Test network.
 
 endmenu

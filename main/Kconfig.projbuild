@@ -43,12 +43,21 @@ config SW3566_FIRMWARE_SEMVER
         Note: The semantic version should be updated whenever the numeric version changes.
         Please ensure that this version reflects the corresponding changes in the numeric version.
 
-config SW3566_FIRMWARE_CHECKSUM
-    string "SW3566 Firmware Checksum (hex)"
+config SW3566_EMBEDDED_CHECKSUM
+    string "SW3566 Embedded Checksum (hex)"
     default "5aa406bde90454f77ac72ff8e6ae4ac002f098dd"
     depends on MCU_MODEL_SW3566 || MCU_MODEL_FAKE_SW3566
     help
-        SW3566 Firmware Checksum
+        Embedded checksum from offset 0x1dfa0 in uncompressed SW3566 firmware.
+        Used to compare with running chip's reported checksum to detect version mismatch.
+
+config SW3566_FILE_SHA1
+    string "SW3566 File SHA-1 (hex)"
+    default ""
+    depends on MCU_MODEL_SW3566 || MCU_MODEL_FAKE_SW3566
+    help
+        SHA-1 hash of the compressed firmware file (.xz) on littlefs.
+        Used to verify file integrity before upgrade (no decompression needed).
 
 config FPGA_FIRMWARE_NUMERIC_VERSION
     int "FPGA Firmware Numeric Version"
@@ -90,12 +99,14 @@ config ENABLE_FPGA_POWER_CTRL
         Enable FPGA Power Control.
         Note: The FPGA power control parameters are measured for the actual ACDC.
 
-config ENABLE_FPGA_ADC_MONITOR
-    bool "Enable FPGA ADC Monitor"
+config FPGA_DUAL_FIRMWARE_WORKAROUND
+    bool "Enable dual FPGA firmware switching workaround"
     default n
     depends on MCU_MODEL_SW3566 || MCU_MODEL_FAKE_SW3566
     help
-        Enable FPGA ADC Monitor.
+        Temporary workaround to support switching between UART switcher
+        and GPU firmware variants. Will be removed when unified firmware
+        is available.
 
 config ENABLE_RFTEST
     bool "Enable rftest"
@@ -120,7 +131,7 @@ config HW_REVISION_VALUE
 
 config ENABLE_PRODUCT_FAMILY_MODIFICATION
     bool "Enable Product Family Modification"
-    default y
+    default n
     help
         Enable modification of the product family for the PCB.
         Note: Enabling this allows you to specify a new product family.

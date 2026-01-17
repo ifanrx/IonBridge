@@ -17,6 +17,7 @@ import random
 import re
 import struct
 import sys
+import tempfile
 import time
 import typing
 from dataclasses import dataclass, field
@@ -36,9 +37,10 @@ from data_types.port import (
     PORTS,
     PortType,
 )
-from data_types.service import SERVICE
+from data_types.service import ServiceCommand
 from data_types.strategy import ChargingStrategy
 from data_types.wifi import WiFiAuthMode, WiFiStateType
+import data_types.display as display_test
 import utils
 
 SERVICE_UUID = "048e3f2e-e1a6-4707-9e74-a930e898a1ea"
@@ -50,6 +52,7 @@ FRAG_SIZE = 499
 
 VERSION_PAT = re.compile(r"(\d+)\.(\d+)\.(\d+)")
 ENVIRON_BLE_ADDRESS = os.environ.get("BLE_ADDRESS") or ""
+BLE_ADDRESS_FILEPATH = pathlib.Path(tempfile.gettempdir()) / "ionbridge_ble_address.txt"
 
 RX_HANDLER = Type[typing.Callable[[BleakGATTCharacteristic, bytearray], None]]
 
@@ -217,7 +220,7 @@ class Message:
     def __repr__(self) -> str:
         suffix = ""
         if len(self.payload) > 32:
-            suffix = f"... (+{len(self.payload)-32} bytes)"
+            suffix = f"... (+{len(self.payload) - 32} bytes)"
         return "<Message: headler={}, payload={}{}({})>".format(
             self.header,
             binascii.hexlify(self.payload[:32]),
@@ -341,13 +344,21 @@ def check_success_rx(_: BleakGATTCharacteristic, data: bytearray) -> None:
     if status != 0:
         click.secho(
             "Failed to perform service {}. Status: {}".format(
-                SERVICE(abs(msg.header.service)).name, status
+                ServiceCommand(abs(msg.header.service)).name, status
             ),
             err=True,
             fg="red",
         )
     if msg.header.tcp_flag == BLEFLAGS.FIN:
         click.secho("Received FIN")
+
+
+def get_address(address: typing.Optional[str]) -> str:
+    if address:
+        return address
+    if BLE_ADDRESS_FILEPATH.exists():
+        address = BLE_ADDRESS_FILEPATH.read_text().strip()
+    return address or ENVIRON_BLE_ADDRESS
 
 
 async def send_cmd(
@@ -359,7 +370,7 @@ async def send_cmd(
     delay: float = 0.5,
     need_token: bool = True,
 ) -> None:
-    address = address or ENVIRON_BLE_ADDRESS
+    address = get_address(address)
     device = await scan_device(address, echo)
     if not device:
         click.secho(f"No device found for address: {address}", err=True, fg="red")
@@ -419,8 +430,14 @@ async def scan() -> None:
         service_uuids=[SERVICE_UUID],
     )
     manufacturer_vid = 0x36E9
-    model_mapping = {0x00: "devb", 0x01: "pro", 0x02: "ultra"}
-    family_mapping = {0x00: "CP02"}
+    model_mapping = {
+        0x00: "devb",
+        0x01: "pro",
+        0x02: "ultra",
+        0xF0: "bird",
+        0xFF: "fake",
+    }
+    family_mapping = {0x00: "CP02", 0x01: "PA768S", 0x02: "CP02S"}
     color_mapping = {0x00: "none", 0x01: "white", 0x02: "gray", 0x03: "black"}
     for k, (device, adv) in devices.items():
         ble_addr = device.address
@@ -464,7 +481,7 @@ async def scan() -> None:
         )
 
 
-@main.command(SERVICE.BLE_ECHO_TEST.command)
+@main.command(ServiceCommand.BLE_ECHO_TEST.command)
 @click.option("-a", "--address", type=str, default=None)
 @click.argument("message", type=str, nargs=-1)
 async def ble_echo_test(address: str, message: str | tuple[str]) -> None:
@@ -485,7 +502,7 @@ async def ble_echo_test(address: str, message: str | tuple[str]) -> None:
     message = " ".join(message)
     click.secho(f"Sending {len(message)} bytes message")
     await send_cmd(
-        SERVICE.BLE_ECHO_TEST,
+        ServiceCommand.BLE_ECHO_TEST,
         bytearray(message.encode()),
         address,
         handle_rx=handle_msg_rx,
@@ -510,7 +527,7 @@ async def read_log_loop(
     echo: bool = True,
     delay: float = 0.5,
 ):
-    service_id = SERVICE.GET_DEBUG_LOG
+    service_id = ServiceCommand.GET_DEBUG_LOG
     need_token = True
     payload = bytearray()
     click.echo(f"Scanning device {address} ...")
@@ -558,7 +575,7 @@ async def read_log_loop(
             await asyncio.sleep(delay)
 
 
-@main.command(SERVICE.GET_DEBUG_LOG.command)
+@main.command(ServiceCommand.GET_DEBUG_LOG.command)
 @click.option("-a", "--address", type=str, default=None)
 async def get_debug_log(address: str) -> None:
     def log_rx(_: BleakGATTCharacteristic, data: bytearray) -> None:
@@ -577,7 +594,7 @@ async def get_debug_log(address: str) -> None:
             click.echo(f"Read log error: {e}, retrying...")
 
 
-@main.command(SERVICE.GET_SECURE_BOOT_DIGEST.command)
+@main.command(ServiceCommand.GET_SECURE_BOOT_DIGEST.command)
 @click.option("-a", "--address", type=str, default=None)
 async def get_secure_boot_digest(address: str) -> None:
     expected_size = 1 + 32  # 1字节状态 + 32字节 digest
@@ -608,27 +625,30 @@ async def get_secure_boot_digest(address: str) -> None:
         )
 
     await send_cmd(
-        SERVICE.GET_SECURE_BOOT_DIGEST, bytearray(), address, handle_rx=handle_msg_rx
+        ServiceCommand.GET_SECURE_BOOT_DIGEST,
+        bytearray(),
+        address,
+        handle_rx=handle_msg_rx,
     )
 
 
-@main.command(SERVICE.PING_MQTT_TELEMETRY.command)
+@main.command(ServiceCommand.PING_MQTT_TELEMETRY.command)
 @click.option("-a", "--address", type=str, default=None)
 async def ping_mqtt_telemetry(address: str) -> None:
     await send_cmd(
-        SERVICE.PING_MQTT_TELEMETRY,
+        ServiceCommand.PING_MQTT_TELEMETRY,
         bytearray(),
         address,
         handle_rx=check_success_rx,
     )
 
 
-@main.command(SERVICE.PING_HTTP.command)
+@main.command(ServiceCommand.PING_HTTP.command)
 @click.option("-a", "--address", type=str, default=None)
 @click.argument("url", type=str, nargs=1)
 async def ping_http(address: str, url: str) -> None:
     await send_cmd(
-        SERVICE.PING_HTTP,
+        ServiceCommand.PING_HTTP,
         bytearray(url.encode()),
         address,
         handle_rx=check_success_rx,
@@ -636,7 +656,7 @@ async def ping_http(address: str, url: str) -> None:
     )
 
 
-@main.command(SERVICE.SET_TEST_MODE_A.command)
+@main.command(ServiceCommand.SET_TEST_MODE_A.command)
 @click.option("-a", "--address", type=str, default=None)
 @click.argument("params", type=int, nargs=6)
 async def set_test_mode_a(address: str, params: typing.Tuple[int]) -> None:
@@ -644,14 +664,14 @@ async def set_test_mode_a(address: str, params: typing.Tuple[int]) -> None:
     for param in params:
         payload.extend(struct.pack("<I", param))
     await send_cmd(
-        SERVICE.SET_TEST_MODE_A,
+        ServiceCommand.SET_TEST_MODE_A,
         payload,
         address,
         handle_rx=check_success_rx,
     )
 
 
-@main.command(SERVICE.SET_TEST_MODE_B.command)
+@main.command(ServiceCommand.SET_TEST_MODE_B.command)
 @click.option("-a", "--address", type=str, default=None)
 @click.argument("params", type=int, nargs=6)
 async def set_test_mode_b(address: str, params: typing.Tuple[int]) -> None:
@@ -659,7 +679,7 @@ async def set_test_mode_b(address: str, params: typing.Tuple[int]) -> None:
     for param in params:
         payload.extend(struct.pack("<I", param))
     await send_cmd(
-        SERVICE.SET_TEST_MODE_B,
+        ServiceCommand.SET_TEST_MODE_B,
         payload,
         address,
         handle_rx=check_success_rx,
@@ -668,46 +688,7 @@ async def set_test_mode_b(address: str, params: typing.Tuple[int]) -> None:
 
 @main.command()
 @click.option("-a", "--address", type=str, default=None)
-async def del_fpga_config(
-    address: str,
-) -> None:
-    payload = bytearray()
-    payload.append(2)
-    await send_cmd(
-        SERVICE.MANAGE_FPGA_CONFIG,
-        payload,
-        address,
-        handle_rx=check_success_rx,
-    )
-
-
-@main.command()
-@click.option("-a", "--address", type=str, default=None)
-@click.argument("adc_threshold_low", type=click.IntRange(0, 255))
-@click.argument("adc_threshold_high", type=click.IntRange(0, 255))
-@click.argument("action_deadzone", type=click.IntRange(0, 255))
-async def set_fpga_config(
-    address: str,
-    adc_threshold_low: int,
-    adc_threshold_high: int,
-    action_deadzone: int,
-) -> None:
-    payload = bytearray()
-    payload.append(1)
-    payload.append(adc_threshold_low)
-    payload.append(adc_threshold_high)
-    payload.append(action_deadzone)
-    await send_cmd(
-        SERVICE.MANAGE_FPGA_CONFIG,
-        payload,
-        address,
-        handle_rx=check_success_rx,
-    )
-
-
-@main.command()
-@click.option("-a", "--address", type=str, default=None)
-async def get_fpga_config(address: str) -> None:
+async def get_hardware_revision(address: str) -> None:
     def handle_msg_rx(_: BleakGATTCharacteristic, data: bytearray) -> None:
         msg = Message.from_bytes(data)
         click.secho(f"Received: {binascii.hexlify(data)} => {msg}")
@@ -723,90 +704,116 @@ async def get_fpga_config(address: str) -> None:
                 fg="red",
             )
             return
-        adc_threshold_low = msg.payload[1]
-        adc_threshold_high = msg.payload[2]
-        action_deadzone = msg.payload[3]
-        click.secho(
-            f"adc_threshold_low: {adc_threshold_low}, adc_threshold_high: {adc_threshold_high}, action_deadzone: {action_deadzone}",
-            fg="green",
-        )
+        hw_revision = msg.payload[1:].decode()
+        click.secho(f"Hardware revision: {hw_revision}", fg="green")
 
     await send_cmd(
-        SERVICE.MANAGE_FPGA_CONFIG, bytearray([0]), address, handle_rx=handle_msg_rx
-    )
-
-
-@main.command()
-@click.option("-a", "--address", type=str, default=None)
-async def get_power_allocator_enabled(address: str) -> None:
-    def handle_msg_rx(_: BleakGATTCharacteristic, data: bytearray) -> None:
-        msg = Message.from_bytes(data)
-        click.secho(f"Received: {binascii.hexlify(data)} => {msg}")
-        if msg.header.size == 1:
-            # 去掉中间阶段的空成功响应
-            return
-
-        status = msg.payload[0]
-        if status != 0:
-            click.secho(
-                "Something went wrong, please check the ESP32 logs",
-                err=True,
-                fg="red",
-            )
-            return
-        enabled = msg.payload[1]
-        click.secho(f"Power allocator enabled: {bool(enabled)}", fg="green")
-
-    await send_cmd(
-        SERVICE.MANAGE_POWER_ALLOCATOR_ENABLED,
-        bytearray([0]),
+        ServiceCommand.GET_HARDWARE_REVISION,
+        bytearray(),
         address,
         handle_rx=handle_msg_rx,
     )
 
 
-@main.command()
+@main.command(ServiceCommand.GET_ACDC_SELF_TEST_RESULT.command)
 @click.option("-a", "--address", type=str, default=None)
-@click.argument("enable", type=click.Choice(["on", "off"], case_sensitive=False))
-async def set_power_allocator_enabled(address: str, enable: str) -> None:
+async def get_acdc_self_test_result(address: str) -> None:
+    # ACDCSelfTestStatus enum values
+    ACDC_SELF_TEST_NOT_RUN = 0
+    ACDC_SELF_TEST_PASSED = 1
+    ACDC_SELF_TEST_NO_PORT = 2
+    ACDC_SELF_TEST_FAIL_L0 = 0x10
+
+    def handle_msg_rx(_: BleakGATTCharacteristic, data: bytearray) -> None:
+        msg = Message.from_bytes(data)
+        if msg.header.size < 2:
+            return
+
+        resp_status, test_status = struct.unpack("<BB", msg.payload[:2])
+        if resp_status != 0:
+            click.secho(
+                "Something went wrong, please check the ESP32 logs",
+                err=True,
+                fg="red",
+            )
+            return
+
+        if test_status == ACDC_SELF_TEST_NOT_RUN:
+            click.secho("ACDC self-test: NOT RUN", fg="yellow")
+        elif test_status == ACDC_SELF_TEST_PASSED:
+            click.secho("ACDC self-test: PASSED", fg="green")
+        elif test_status == ACDC_SELF_TEST_NO_PORT:
+            click.secho("ACDC self-test: NO PORT (no activated port)", fg="yellow")
+        elif test_status >= ACDC_SELF_TEST_FAIL_L0:
+            failed_level = test_status - ACDC_SELF_TEST_FAIL_L0
+            click.secho(
+                f"ACDC self-test: FAILED at level {failed_level}",
+                fg="red",
+            )
+        else:
+            click.secho(f"ACDC self-test: UNKNOWN status 0x{test_status:02x}", fg="red")
+
     await send_cmd(
-        SERVICE.MANAGE_POWER_ALLOCATOR_ENABLED,
-        bytearray([1, int(enable == "on")]),
+        ServiceCommand.GET_ACDC_SELF_TEST_RESULT,
+        bytearray(),
         address,
-        handle_rx=check_success_rx,
+        handle_rx=handle_msg_rx,
     )
 
 
-@main.command()
+@main.command(ServiceCommand.RUN_ACDC_SELF_TEST.command)
 @click.option("-a", "--address", type=str, default=None)
-async def del_power_allocator_enabled(address: str) -> None:
+async def run_acdc_self_test(address: str) -> None:
+    """Run ACDC self-test and display the result."""
+    ACDC_SELF_TEST_NOT_RUN = 0
+    ACDC_SELF_TEST_PASSED = 1
+    ACDC_SELF_TEST_NO_PORT = 2
+    ACDC_SELF_TEST_FAIL_L0 = 0x10
+
+    def handle_msg_rx(_: BleakGATTCharacteristic, data: bytearray) -> None:
+        msg = Message.from_bytes(data)
+        if msg.header.size < 2:
+            return
+
+        resp_status, test_status = struct.unpack("<BB", msg.payload[:2])
+        if resp_status != 0:
+            click.secho(
+                "Something went wrong, please check the ESP32 logs",
+                err=True,
+                fg="red",
+            )
+            return
+
+        if test_status == ACDC_SELF_TEST_NOT_RUN:
+            click.secho("ACDC self-test: NOT RUN", fg="yellow")
+        elif test_status == ACDC_SELF_TEST_PASSED:
+            click.secho("ACDC self-test: PASSED", fg="green")
+        elif test_status == ACDC_SELF_TEST_NO_PORT:
+            click.secho("ACDC self-test: NO PORT (no activated port)", fg="yellow")
+        elif test_status >= ACDC_SELF_TEST_FAIL_L0:
+            failed_level = test_status - ACDC_SELF_TEST_FAIL_L0
+            click.secho(
+                f"ACDC self-test: FAILED at level {failed_level}",
+                fg="red",
+            )
+        else:
+            click.secho(f"ACDC self-test: UNKNOWN status 0x{test_status:02x}", fg="red")
+
     await send_cmd(
-        SERVICE.MANAGE_POWER_ALLOCATOR_ENABLED,
-        bytearray([2]),
+        ServiceCommand.RUN_ACDC_SELF_TEST,
+        bytearray(),
         address,
-        handle_rx=check_success_rx,
+        handle_rx=handle_msg_rx,
     )
 
 
-@main.command(SERVICE.GET_DEVICE_UPTIME.command)
-@click.option("-a", "--address", type=str, default=None)
-async def uptime(address: str) -> None:
-    await send_cmd(SERVICE.GET_DEVICE_UPTIME, bytearray(), address)
-
-
-@main.command(SERVICE.GET_DEVICE_BLE_ADDR.command)
-@click.option("-a", "--address", type=str, default=None)
-async def ble_addr(address: str) -> None:
-    await send_cmd(SERVICE.GET_DEVICE_BLE_ADDR, bytearray(), address)
-
-
-@main.command(SERVICE.GET_DEVICE_WIFI_ADDR.command)
+@main.command(ServiceCommand.GET_DEVICE_WIFI_ADDR.command)
 @click.option("-a", "--address", type=str, default=None)
 async def wifi_addr(address: str) -> None:
-    await send_cmd(SERVICE.GET_DEVICE_WIFI_ADDR, bytearray(), address)
+    await send_cmd(ServiceCommand.GET_DEVICE_WIFI_ADDR, bytearray(), address)
 
 
-@main.command(SERVICE.SET_WIFI_SSID_AND_PASSWORD.command)
+@main.command(ServiceCommand.SET_WIFI_SSID_AND_PASSWORD.command)
 @click.argument("ssid", type=str)
 @click.argument("password", type=str, default="")
 @click.option("-n", "--no-passwd", is_flag=True, default=False)
@@ -820,7 +827,7 @@ async def wifi_ssid_and_password(
     if len(password) > 63:
         raise ValueError("Password is too long")
     await send_cmd(
-        SERVICE.SET_WIFI_SSID_AND_PASSWORD,
+        ServiceCommand.SET_WIFI_SSID_AND_PASSWORD,
         bytearray(
             bytes([len(ssid_bytes), int(not no_passwd)])
             + ssid_bytes
@@ -830,10 +837,11 @@ async def wifi_ssid_and_password(
     )
 
 
-@main.command(SERVICE.GET_WIFI_RECORDS.command)
+@main.command(ServiceCommand.GET_WIFI_RECORDS.command)
 @click.option("-a", "--address", type=str, default=None)
 async def get_wifi_records(address: str) -> None:
     payload = bytearray()
+
     def handle_rx(_: BleakGATTCharacteristic, data: bytearray) -> None:
         msg = Message.from_bytes(data)
         click.secho(f"Received: {binascii.hexlify(data)} => {msg}")
@@ -874,10 +882,12 @@ async def get_wifi_records(address: str) -> None:
                 fg="green",
             )
 
-    await send_cmd(SERVICE.GET_WIFI_RECORDS, bytearray(), address, handle_rx=handle_rx)
+    await send_cmd(
+        ServiceCommand.GET_WIFI_RECORDS, bytearray(), address, handle_rx=handle_rx
+    )
 
 
-@main.command(SERVICE.OPERATE_WIFI_RECORD.command)
+@main.command(ServiceCommand.OPERATE_WIFI_RECORD.command)
 @click.argument(
     "operation",
     type=click.Choice(["create", "update", "delete"], case_sensitive=False),
@@ -904,11 +914,11 @@ async def operate_wifi_record(
     payload.extend(ssid.encode("utf-8"))
     payload.extend(password.encode("utf-8"))
     await send_cmd(
-        SERVICE.OPERATE_WIFI_RECORD, payload, address, handle_rx=check_success_rx
+        ServiceCommand.OPERATE_WIFI_RECORD, payload, address, handle_rx=check_success_rx
     )
 
 
-@main.command(SERVICE.GET_WIFI_STATE_MACHINE.command)
+@main.command(ServiceCommand.GET_WIFI_STATE_MACHINE.command)
 @click.option("-a", "--address", type=str, default=None)
 async def get_wifi_state_machine(address: str) -> None:
     def handle_rx(_: BleakGATTCharacteristic, data: bytearray) -> None:
@@ -924,22 +934,22 @@ async def get_wifi_state_machine(address: str) -> None:
         click.secho(f"State: {WiFiStateType(state).name}", fg="green")
 
     await send_cmd(
-        SERVICE.GET_WIFI_STATE_MACHINE, bytearray(), address, handle_rx=handle_rx
+        ServiceCommand.GET_WIFI_STATE_MACHINE, bytearray(), address, handle_rx=handle_rx
     )
 
 
-@main.command(SERVICE.SET_WIFI_STATE_MACHINE.command)
+@main.command(ServiceCommand.SET_WIFI_STATE_MACHINE.command)
 @click.argument("state", type=int)
 @click.option("-a", "--address", type=str, default=None)
 async def set_wifi_state_machine(state: int, address: str) -> None:
     await send_cmd(
-        SERVICE.SET_WIFI_STATE_MACHINE,
+        ServiceCommand.SET_WIFI_STATE_MACHINE,
         bytearray([WiFiStateType.from_int(state)]),
         address,
     )
 
 
-@main.command(SERVICE.GET_DEVICE_SERIAL_NO.command)
+@main.command(ServiceCommand.GET_DEVICE_SERIAL_NO.command)
 @click.option("-a", "--address", type=str, default=None)
 async def serial_number(address: str) -> None:
     def handle_rx(_: BleakGATTCharacteristic, data: bytearray) -> None:
@@ -949,22 +959,25 @@ async def serial_number(address: str) -> None:
             return
         click.secho(f"Serial number: {msg.payload[1:].decode()}")
 
-    await send_cmd(SERVICE.GET_DEVICE_SERIAL_NO, bytearray(), address, handle_rx)
+    await send_cmd(ServiceCommand.GET_DEVICE_SERIAL_NO, bytearray(), address, handle_rx)
 
 
-@main.command(SERVICE.SWITCH_DEVICE.command)
+@main.command(ServiceCommand.SET_DEVICE_POWER_STATE.command)
 @click.option("-a", "--address", type=str, default=None)
-@click.argument("device_switch", type=click.Choice(["open", "close"]))
-async def switch_device(address: str, device_switch: str) -> None:
-    device_switch_v = 1
-    if device_switch == "close":
-        device_switch_v = 0
-    await send_cmd(SERVICE.SWITCH_DEVICE, bytearray([device_switch_v]), address)
+@click.argument(
+    "device_power_state", type=click.Choice(["on", "off"], case_sensitive=False)
+)
+async def set_device_power_state(address: str, device_power_state: str) -> None:
+    value_mapping = {"on": 1, "off": 0}
+    v = value_mapping.get(device_power_state.lower())
+    if v is None:
+        raise ValueError(f"Invalid device power state: {device_power_state}")
+    await send_cmd(ServiceCommand.SET_DEVICE_POWER_STATE, bytearray([v]), address)
 
 
-@main.command(SERVICE.GET_DEVICE_SWITCH.command)
+@main.command(ServiceCommand.GET_DEVICE_POWER_STATE.command)
 @click.option("-a", "--address", type=str, default=None)
-async def get_device_switch(address: str) -> None:
+async def get_device_power_state(address: str) -> None:
     def handle_msg_rx(_: BleakGATTCharacteristic, data: bytearray) -> None:
         msg = Message.from_bytes(data)
         click.secho(f"Received: {binascii.hexlify(data)} => {msg}")
@@ -977,18 +990,14 @@ async def get_device_switch(address: str) -> None:
             click.secho("Device is closed", fg="yellow")
 
     await send_cmd(
-        SERVICE.GET_DEVICE_SWITCH, bytearray(), address, handle_rx=handle_msg_rx
+        ServiceCommand.GET_DEVICE_POWER_STATE,
+        bytearray(),
+        address,
+        handle_rx=handle_msg_rx,
     )
 
 
-@main.command(SERVICE.CONFIRM_OTA.command)
-@click.argument("validation_hash", type=str)
-@click.option("-a", "--address", type=str, default=None)
-async def confirm(validation_hash: str, address: str) -> None:
-    await send_cmd(SERVICE.CONFIRM_OTA, bytearray.fromhex(validation_hash), address)
-
-
-@main.command(SERVICE.SCAN_WIFI.command)
+@main.command(ServiceCommand.SCAN_WIFI.command)
 @click.option("-a", "--address", type=str, default=None)
 async def wifi_scan(address: str) -> None:
     address = address or ENVIRON_BLE_ADDRESS
@@ -1019,7 +1028,7 @@ async def wifi_scan(address: str) -> None:
         header = BLEHeader(
             0,
             msg_id,
-            SERVICE.SCAN_WIFI,
+            ServiceCommand.SCAN_WIFI,
             0,
             BLEFLAGS.SYN | (FRAGFLAGS.NO_FRAG << 3),
         )
@@ -1031,7 +1040,7 @@ async def wifi_scan(address: str) -> None:
             client,
             bytearray(),
             msg_id + 1,
-            service_id=SERVICE.SCAN_WIFI,
+            service_id=ServiceCommand.SCAN_WIFI,
         )
         while not finished:
             await asyncio.sleep(0)
@@ -1073,31 +1082,33 @@ async def wifi_scan(address: str) -> None:
             )
 
 
-@main.command(SERVICE.SET_WIFI_SSID.command)
+@main.command(ServiceCommand.SET_WIFI_SSID.command)
 @click.argument("ssid", type=str)
 @click.option("-a", "--address", type=str, default=None)
 async def wifi_ssid(ssid: str, address: str) -> None:
-    await send_cmd(SERVICE.SET_WIFI_SSID, bytearray(ssid.encode("utf-8")), address)
+    await send_cmd(
+        ServiceCommand.SET_WIFI_SSID, bytearray(ssid.encode("utf-8")), address
+    )
 
 
-@main.command(SERVICE.SET_WIFI_PASSWORD.command)
+@main.command(ServiceCommand.SET_WIFI_PASSWORD.command)
 @click.argument("password", type=str)
 @click.option("-a", "--address", type=str, default=None)
 async def wifi_password(password: str, address: str) -> None:
     await send_cmd(
-        SERVICE.SET_WIFI_PASSWORD,
+        ServiceCommand.SET_WIFI_PASSWORD,
         bytearray(password.encode("utf-8")),
         address,
     )
 
 
-@main.command(SERVICE.RESET_WIFI.command)
+@main.command(ServiceCommand.RESET_WIFI.command)
 @click.option("-a", "--address", type=str, default=None)
 async def wifi_reset(address: str) -> None:
-    await send_cmd(SERVICE.RESET_WIFI, bytearray(), address)
+    await send_cmd(ServiceCommand.RESET_WIFI, bytearray(), address)
 
 
-@main.command(SERVICE.GET_WIFI_STATUS.command)
+@main.command(ServiceCommand.GET_WIFI_STATUS.command)
 @click.option("-a", "--address", type=str, default=None)
 async def wifi_query(address: str) -> None:
     def deserialize_ssid_detail(serialized_data: bytes | bytearray) -> dict[str, Any]:
@@ -1139,10 +1150,10 @@ async def wifi_query(address: str) -> None:
             detail = deserialize_ssid_detail(msg.payload[1:])
             pprint(detail)
 
-    await send_cmd(SERVICE.GET_WIFI_STATUS, bytearray(), address, handle_rx)
+    await send_cmd(ServiceCommand.GET_WIFI_STATUS, bytearray(), address, handle_rx)
 
 
-def version_rx_handler(service: SERVICE, name: str) -> RX_HANDLER:
+def version_rx_handler(service: ServiceCommand, name: str) -> RX_HANDLER:
     def handle_rx(_: BleakGATTCharacteristic, data: bytearray) -> None:
         msg = Message.from_bytes(data)
         click.secho(f"Received: {binascii.hexlify(data)} => {msg}")
@@ -1162,59 +1173,23 @@ def version_rx_handler(service: SERVICE, name: str) -> RX_HANDLER:
     return handle_rx
 
 
-@main.command(SERVICE.GET_AP_VERSION.command)
+@main.command(ServiceCommand.GET_AP_VERSION.command)
 @click.option("-a", "--address", type=str, default=None)
 async def get_ap_version(address: str) -> None:
     await send_cmd(
-        SERVICE.GET_AP_VERSION,
+        ServiceCommand.GET_AP_VERSION,
         address=address,
-        handle_rx=version_rx_handler(SERVICE.GET_AP_VERSION, "AP"),
+        handle_rx=version_rx_handler(ServiceCommand.GET_AP_VERSION, "AP"),
     )
 
 
-@main.command(SERVICE.GET_BP_VERSION.command)
-@click.option("-a", "--address", type=str, default=None)
-async def get_bp_version(address: str) -> None:
-    await send_cmd(
-        SERVICE.GET_BP_VERSION,
-        address=address,
-        handle_rx=version_rx_handler(SERVICE.GET_BP_VERSION, "BP"),
-    )
-
-
-@main.command(SERVICE.GET_FPGA_VERSION.command)
-@click.option("-a", "--address", type=str, default=None)
-async def get_fpga_version(address: str) -> None:
-    await send_cmd(
-        SERVICE.GET_FPGA_VERSION,
-        address=address,
-        handle_rx=version_rx_handler(SERVICE.GET_FPGA_VERSION, "FPGA"),
-    )
-
-
-@main.command(SERVICE.GET_ZRLIB_VERSION.command)
-@click.option("-a", "--address", type=str, default=None)
-async def get_zrlib_version(address: str) -> None:
-    await send_cmd(
-        SERVICE.GET_ZRLIB_VERSION,
-        address=address,
-        handle_rx=version_rx_handler(SERVICE.GET_ZRLIB_VERSION, "ZRLib"),
-    )
-
-
-@main.command(SERVICE.GET_POWER_SUPPLY_STATUS.command)
-@click.option("-a", "--address", type=str, default=None)
-async def get_power_supply_status(address: str) -> None:
-    await send_cmd(SERVICE.GET_POWER_SUPPLY_STATUS, address=address)
-
-
-@main.command(SERVICE.GET_CHARGING_STATUS.command)
+@main.command(ServiceCommand.GET_CHARGING_STATUS.command)
 @click.option("-a", "--address", type=str, default=None)
 async def get_charging_status(address: str) -> None:
     def handle_msg_rx(_: BleakGATTCharacteristic, data: bytearray) -> None:
         msg = Message.from_bytes(data)
         click.secho(f"Received: {binascii.hexlify(data)} => {msg}")
-        if abs(msg.header.service) != SERVICE.GET_CHARGING_STATUS:
+        if abs(msg.header.service) != ServiceCommand.GET_CHARGING_STATUS:
             return
         if msg.header.tcp_flag != BLEFLAGS.ACK:
             return
@@ -1236,52 +1211,13 @@ async def get_charging_status(address: str) -> None:
             click.secho("Not charging", fg="green")
 
     await send_cmd(
-        SERVICE.GET_CHARGING_STATUS,
+        ServiceCommand.GET_CHARGING_STATUS,
         address=address,
         handle_rx=handle_msg_rx,
     )
 
 
-@main.command(SERVICE.GET_POWER_STATISTICS.command)
-@click.argument("port", type=click.Choice(PORTS, case_sensitive=False))
-@click.option("-a", "--address", type=str, default=None)
-async def get_power_statistics(port: str, address: str) -> None:
-    def handle_msg_rx(_: BleakGATTCharacteristic, data: bytearray) -> None:
-        msg = Message.from_bytes(data)
-        click.secho(f"Received: {binascii.hexlify(data)} => {msg}")
-        if msg.header.size != 5:
-            return
-
-        status, protocol, current, voltage, temperature = struct.unpack(
-            "<5B",
-            msg.payload,
-        )
-        if status != 0:
-            click.secho(
-                "Something went wrong, please check the ESP32 logs",
-                err=True,
-                fg="red",
-            )
-            return
-
-        actual_current = current / 32.0
-        actual_voltage = voltage / 8.0
-        protocol_item = FastChargingProtocol(protocol)
-        click.secho(
-            f"Protocol: {protocol_item.name}, Current: {actual_current}A, "
-            f"Voltage: {actual_voltage}V, Temperature: {temperature}°C",
-            fg="green",
-        )
-
-    await send_cmd(
-        SERVICE.GET_POWER_STATISTICS,
-        bytearray([PORTS.index(port) & 0xFF]),
-        address,
-        handle_rx=handle_msg_rx,
-    )
-
-
-@main.command(SERVICE.GET_POWER_HISTORICAL_STATS.command)
+@main.command(ServiceCommand.GET_POWER_HISTORICAL_STATS.command)
 @click.argument("port", type=click.Choice(PORTS, case_sensitive=False))
 @click.argument("offset", type=int)
 @click.option("-a", "--address", type=str, default=None)
@@ -1315,14 +1251,14 @@ async def get_power_historical_stats(port: str, offset: int, address: str) -> No
     byte_array = bytearray([PORTS.index(port) & 0xFF])
     byte_array.extend(struct.pack("<H", offset))
     await send_cmd(
-        SERVICE.GET_POWER_HISTORICAL_STATS,
+        ServiceCommand.GET_POWER_HISTORICAL_STATS,
         byte_array,
         address,
         handle_rx=handle_msg_rx,
     )
 
 
-@main.command(SERVICE.SET_PORT_PRIORITY.command)
+@main.command(ServiceCommand.SET_PORT_PRIORITY.command)
 @click.argument("priority", type=int)
 @click.option("-a", "--address", type=str, default=None)
 async def set_port_priority(priority: int, address: str) -> None:
@@ -1331,22 +1267,22 @@ async def set_port_priority(priority: int, address: str) -> None:
         val = int(priority % 10)
         priority = int(priority / 10)
         byte_array.append(val)
-    await send_cmd(SERVICE.SET_PORT_PRIORITY, byte_array, address)
+    await send_cmd(ServiceCommand.SET_PORT_PRIORITY, byte_array, address)
 
 
-@main.command(SERVICE.GET_PORT_PRIORITY.command)
+@main.command(ServiceCommand.GET_PORT_PRIORITY.command)
 @click.option("-a", "--address", type=str, default=None)
 async def get_port_priority(address: str) -> None:
-    await send_cmd(SERVICE.GET_PORT_PRIORITY, bytearray(), address)
+    await send_cmd(ServiceCommand.GET_PORT_PRIORITY, bytearray(), address)
 
 
-@main.command(SERVICE.GET_CHARGING_STRATEGY.command)
+@main.command(ServiceCommand.GET_CHARGING_STRATEGY.command)
 @click.option("-a", "--address", type=str, default=None)
 async def get_charging_strategy(address: str) -> None:
     def handle_msg_rx(_: BleakGATTCharacteristic, data: bytearray) -> None:
         msg = Message.from_bytes(data)
         click.secho(f"Received: {binascii.hexlify(data)} => {msg}")
-        if abs(msg.header.service) != SERVICE.GET_CHARGING_STRATEGY:
+        if abs(msg.header.service) != ServiceCommand.GET_CHARGING_STRATEGY:
             return
         if msg.header.size < 2:
             return
@@ -1360,24 +1296,26 @@ async def get_charging_strategy(address: str) -> None:
             )
             return
 
-        click.secho(f"Charging strategy: {ChargingStrategy(strategy).name}", fg="green")
+        click.secho(
+            f"Charging strategy: {ChargingStrategy.to_string(strategy)}", fg="green"
+        )
 
     await send_cmd(
-        SERVICE.GET_CHARGING_STRATEGY,
+        ServiceCommand.GET_CHARGING_STRATEGY,
         bytearray(),
         address,
         handle_rx=handle_msg_rx,
     )
 
 
-@main.command(SERVICE.GET_PORT_PD_STATUS.command)
+@main.command(ServiceCommand.GET_PORT_PD_STATUS.command)
 @click.argument("port", type=click.Choice(PORTS, case_sensitive=False))
 @click.option("-a", "--address", type=str, default=None)
 async def get_pd_status(address: str, port: str) -> None:
     def handle_msg_rx(_: BleakGATTCharacteristic, data: bytearray) -> None:
         msg = Message.from_bytes(data)
         click.secho(f"Received: {binascii.hexlify(data)} => {msg}")
-        if abs(msg.header.service) != SERVICE.GET_PORT_PD_STATUS:
+        if abs(msg.header.service) != ServiceCommand.GET_PORT_PD_STATUS:
             return
         if msg.header.size < 2:
             return
@@ -1395,14 +1333,14 @@ async def get_pd_status(address: str, port: str) -> None:
         click.secho(f"Port: {port}, PD status: {pd_status}", fg="green")
 
     await send_cmd(
-        SERVICE.GET_PORT_PD_STATUS,
+        ServiceCommand.GET_PORT_PD_STATUS,
         bytearray([PORTS.index(port) & 0xFF]),
         address,
         handle_rx=handle_msg_rx,
     )
 
 
-@main.command(SERVICE.GET_ALL_POWER_STATISTICS.command)
+@main.command(ServiceCommand.GET_ALL_POWER_STATISTICS.command)
 @click.option("-a", "--address", type=str, default=None)
 async def get_all_power_statistics(address: str) -> None:
     # 1 字节状态 + 5 个充电端口的 8 字节数据
@@ -1453,53 +1391,14 @@ async def get_all_power_statistics(address: str) -> None:
             offset += size
 
     await send_cmd(
-        SERVICE.GET_ALL_POWER_STATISTICS,
+        ServiceCommand.GET_ALL_POWER_STATISTICS,
         bytearray(),
         address,
         handle_rx=handle_msg_rx,
     )
 
 
-@main.command(SERVICE.GET_START_CHARGE_TIMESTAMP.command)
-@click.option("-a", "--address", type=str, default=None)
-async def get_start_charge_timestamp(address: str) -> None:
-    def handle_rx(_: BleakGATTCharacteristic, data: bytearray) -> None:
-        msg = Message.from_bytes(data)
-        click.secho(f"Received: {binascii.hexlify(data)} => {msg}")
-        if msg.header.size == 1:
-            return
-        status, timestamp = struct.unpack("<BL", msg.payload)
-        if status != 0:
-            click.secho(
-                "Something went wrong, please check the ESP32 logs",
-                err=True,
-                fg="red",
-            )
-            return
-        s = ""
-        if timestamp > 0:
-            s = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(timestamp))
-        click.secho(
-            f"Start charge timestamp: {timestamp} '{hex(timestamp)}' ({s})", fg="green"
-        )
-
-    await send_cmd(
-        SERVICE.GET_START_CHARGE_TIMESTAMP, bytearray(), address, handle_rx=handle_rx
-    )
-
-
-@main.command(SERVICE.TOGGLE_PORT_POWER.command)
-@click.argument("port", type=click.Choice(PORTS, case_sensitive=False))
-@click.option("-a", "--address", type=str, default=None)
-async def toggle_port_power(port: str, address: str) -> None:
-    await send_cmd(
-        SERVICE.TOGGLE_PORT_POWER,
-        bytearray([PORTS.index(port) & 0xFF]),
-        address,
-    )
-
-
-@main.command(SERVICE.ASSOCIATE_DEVICE.command)
+@main.command(ServiceCommand.ASSOCIATE_DEVICE.command)
 @click.argument("passcode", type=str, default="0000")
 @click.option("-a", "--address", type=str, default=None)
 @click.option("--reset-data", is_flag=True, default=False)
@@ -1524,6 +1423,7 @@ async def associate_device(passcode: str, reset_data: bool, address: str) -> Non
         with open(".token", "wb") as f:
             click.secho(f"Got token: 0x{token:02x}({token})", fg="green")
             f.write(token.to_bytes(1, "big"))
+        BLE_ADDRESS_FILEPATH.write_text(address or "", encoding="utf-8")
 
     if not (len(passcode) == 4 and passcode.isnumeric()):
         click.secho("Passcode must be 4 digits", err=True, fg="red")
@@ -1531,7 +1431,7 @@ async def associate_device(passcode: str, reset_data: bool, address: str) -> Non
     payload = bytearray(int(d) & 0xFF for d in passcode)
     payload.append(int(not reset_data))
     await send_cmd(
-        SERVICE.ASSOCIATE_DEVICE,
+        ServiceCommand.ASSOCIATE_DEVICE,
         payload,
         address,
         handle_msg_rx,
@@ -1539,105 +1439,70 @@ async def associate_device(passcode: str, reset_data: bool, address: str) -> Non
     )
 
 
-@main.command(SERVICE.RESET_DEVICE.command)
+@main.command(ServiceCommand.RESET_DEVICE.command)
 @click.option("-a", "--address", type=str, default=None)
 async def reset(address: str) -> None:
-    await send_cmd(SERVICE.RESET_DEVICE, bytearray(), address)
+    await send_cmd(ServiceCommand.RESET_DEVICE, bytearray(), address)
 
 
-@main.command(SERVICE.PERFORM_WIFI_OTA.command)
-@click.argument("version", type=str)
-@click.option("-a", "--address", type=str, default=None)
-async def wifi_ota(version: str, address: str) -> None:
-    matched = VERSION_PAT.match(version)
-    if not matched:
-        click.secho("Invalid version", err=True, fg="red")
-        return
-    major, minor, patch = matched.groups()
-    await send_cmd(
-        SERVICE.PERFORM_WIFI_OTA,
-        bytearray([int(major), int(minor), int(patch)]),
-        address,
-    )
-
-
-@main.command(SERVICE.GET_WIFI_OTA_PROGRESS.command)
-@click.option("-a", "--address", type=str, default=None)
-@click.option("-p", "--period", type=int, default=0)
-async def wifi_ota_progress(address: str, period: int) -> None:
-    previous_progress = 0
-    current_progress = 0
-    t = 0
-
-    def handle_msg_rx(_: BleakGATTCharacteristic, data: bytearray) -> None:
-        nonlocal previous_progress, current_progress, t
-        msg = Message.from_bytes(data)
-        status = struct.unpack_from("B", msg.payload, 0)[0]
-        if status != 0:
-            click.secho("Failed to perform OTA, please check the ESP32 logs")
-            return
-
-        if msg.header.size < 5:
-            return
-
-        current_progress = struct.unpack_from("<i", msg.payload, 1)[0]
-        curr_t = time.time()
-        speed = (current_progress - previous_progress) / (curr_t - t) / 1024
-        click.secho(
-            f"[{int(curr_t)}] Progress: {current_progress} Speed: {speed:.2f} KiB/s",
-        )
-        previous_progress = current_progress
-        t = curr_t
-
-        if len(msg.payload) > 5:
-            failed_code = struct.unpack_from("<i", msg.payload, 5)[0]
-            click.secho(f"Failed: {failed_code}", err=True, fg="red")
-
-    t = int(time.time())
-    while True:
-        await send_cmd(
-            SERVICE.GET_WIFI_OTA_PROGRESS,
-            bytearray(),
-            address,
-            handle_msg_rx,
-            echo=period == 0,
-        )
-        if period == 0:
-            break
-        await asyncio.sleep(period)
-
-
-@main.command(SERVICE.REBOOT_DEVICE.command)
+@main.command(ServiceCommand.REBOOT_DEVICE.command)
 @click.option("-a", "--address", type=str, default=None)
 async def reboot(address: str) -> None:
-    await send_cmd(SERVICE.REBOOT_DEVICE, bytearray(), address)
+    await send_cmd(ServiceCommand.REBOOT_DEVICE, bytearray(), address)
 
 
-@main.command(SERVICE.SET_CHARGING_STRATEGY.command)
-@click.argument("strategy", type=click.Choice(["fast", "slow", "usba"], case_sensitive=False))
+@main.command(ServiceCommand.GET_CHARGE_DURATION.command)
 @click.option("-a", "--address", type=str, default=None)
-async def set_charging_strategy(strategy: str, address: str) -> None:
-    payload = bytearray([0])
-    strategy_mapping = {"fast": 0, "slow": 1, "usba": 5}
-    payload[0] = strategy_mapping.get(strategy.lower(), 0)
+async def get_charge_duration(address: str) -> None:
+    def handle_msg_rx(_: BleakGATTCharacteristic, data: bytearray) -> None:
+        msg = Message.from_bytes(data)
+        if msg.header.size != 3:
+            return
+        status, duration = struct.unpack("<BH", msg.payload)
+        if status != 0:
+            click.secho(f"Error getting charge duration: {status}", err=True, fg="red")
+            return
+
+        click.secho(f"Charge duration: {duration}min", fg="green")
+
     await send_cmd(
-        SERVICE.SET_CHARGING_STRATEGY, payload, address, handle_rx=check_success_rx
+        ServiceCommand.GET_CHARGE_DURATION,
+        bytearray(),
+        address,
+        handle_rx=handle_msg_rx,
     )
 
 
-@main.command(SERVICE.SET_DISPLAY_INTENSITY.command)
+@main.command(ServiceCommand.SET_CHARGING_STRATEGY.command)
+@click.argument(
+    "strategy",
+    type=click.Choice(ChargingStrategy.get_choices(), case_sensitive=False),
+    callback=ChargingStrategy.click_callback,
+)
+@click.option("-a", "--address", type=str, default=None)
+async def set_charging_strategy(strategy: int, address: str) -> None:
+    payload = bytearray([strategy & 0xFF])
+    await send_cmd(
+        ServiceCommand.SET_CHARGING_STRATEGY,
+        payload,
+        address,
+        handle_rx=check_success_rx,
+    )
+
+
+@main.command(ServiceCommand.SET_DISPLAY_INTENSITY.command)
 @click.argument("intensity", callback=cast_to_int)
 @click.option("-a", "--address", type=str, default=None)
 async def set_display_intensity(intensity: int, address: str) -> None:
     await send_cmd(
-        SERVICE.SET_DISPLAY_INTENSITY,
+        ServiceCommand.SET_DISPLAY_INTENSITY,
         bytearray([intensity % 256]),
         address,
         handle_rx=check_success_rx,
     )
 
 
-@main.command(SERVICE.SET_DISPLAY_MODE.command)
+@main.command(ServiceCommand.SET_DISPLAY_MODE.command)
 @click.argument("mode", type=click.Choice(["off", "manual", "power_meter"]))
 @click.option("-a", "--address", type=str, default=None)
 async def set_display_mode(mode: str, address: str) -> None:
@@ -1650,14 +1515,14 @@ async def set_display_mode(mode: str, address: str) -> None:
         case "power_meter":
             mode_byte = 2
     await send_cmd(
-        SERVICE.SET_DISPLAY_MODE,
+        ServiceCommand.SET_DISPLAY_MODE,
         bytearray([mode_byte]),
         address,
         handle_rx=check_success_rx,
     )
 
 
-@main.command(SERVICE.GET_DISPLAY_INTENSITY.command)
+@main.command(ServiceCommand.GET_DISPLAY_INTENSITY.command)
 @click.option("-a", "--address", type=str, default=None)
 async def get_display_intensity(address: str) -> None:
     def handle_msg_rx(_: BleakGATTCharacteristic, data: bytearray) -> None:
@@ -1674,11 +1539,14 @@ async def get_display_intensity(address: str) -> None:
         click.secho(f"Display intensity: {intensity}({hex(intensity)})", fg="green")
 
     await send_cmd(
-        SERVICE.GET_DISPLAY_INTENSITY, bytearray(), address, handle_rx=handle_msg_rx
+        ServiceCommand.GET_DISPLAY_INTENSITY,
+        bytearray(),
+        address,
+        handle_rx=handle_msg_rx,
     )
 
 
-@main.command(SERVICE.GET_DISPLAY_MODE.command)
+@main.command(ServiceCommand.GET_DISPLAY_MODE.command)
 @click.option("-a", "--address", type=str, default=None)
 async def get_display_mode(address: str) -> None:
     def handle_msg_rx(_: BleakGATTCharacteristic, data: bytearray) -> None:
@@ -1694,11 +1562,11 @@ async def get_display_mode(address: str) -> None:
         click.secho(f"Display mode: {mode}({mode_mapping.get(mode)})", fg="green")
 
     await send_cmd(
-        SERVICE.GET_DISPLAY_MODE, bytearray(), address, handle_rx=handle_msg_rx
+        ServiceCommand.GET_DISPLAY_MODE, bytearray(), address, handle_rx=handle_msg_rx
     )
 
 
-@main.command(SERVICE.SET_DISPLAY_FLIP.command)
+@main.command(ServiceCommand.SET_DISPLAY_FLIP.command)
 @click.argument("flip", type=click.Choice(["normal", "flip"]))
 @click.option("-a", "--address", type=str, default=None)
 async def set_display_flip(flip: str, address: str) -> None:
@@ -1710,14 +1578,14 @@ async def set_display_flip(flip: str, address: str) -> None:
             flip_byte = 1
 
     await send_cmd(
-        SERVICE.SET_DISPLAY_FLIP,
+        ServiceCommand.SET_DISPLAY_FLIP,
         bytearray([flip_byte]),
         address,
         handle_rx=check_success_rx,
     )
 
 
-@main.command(SERVICE.GET_DISPLAY_FLIP.command)
+@main.command(ServiceCommand.GET_DISPLAY_FLIP.command)
 @click.option("-a", "--address", type=str, default=None)
 async def get_display_flip(address: str) -> None:
     def handle_msg_rx(_: BleakGATTCharacteristic, data: bytearray) -> None:
@@ -1733,14 +1601,14 @@ async def get_display_flip(address: str) -> None:
         click.secho(f"Display flip: {flip}({flip_mapping.get(flip)})", fg="green")
 
     await send_cmd(
-        SERVICE.GET_DISPLAY_FLIP,
+        ServiceCommand.GET_DISPLAY_FLIP,
         bytearray(),
         address,
         handle_rx=handle_msg_rx,
     )
 
 
-@main.command(SERVICE.SET_DISPLAY_CONFIG.command)
+@main.command(ServiceCommand.SET_DISPLAY_CONFIG.command)
 @click.option("-a", "--address", type=str, default=None)
 @click.argument("intensity", callback=cast_to_int)
 @click.argument("flip", type=click.Choice(["normal", "flip"]))
@@ -1767,14 +1635,14 @@ async def set_display_config(
     payload.extend(struct.pack("<H", mode_param))
     print(len(payload))
     await send_cmd(
-        SERVICE.SET_DISPLAY_CONFIG,
+        ServiceCommand.SET_DISPLAY_CONFIG,
         payload,
         address,
         handle_rx=check_success_rx,
     )
 
 
-@main.command(SERVICE.SET_DISPLAY_STATE.command)
+@main.command(ServiceCommand.SET_DISPLAY_STATE.command)
 @click.option("-a", "--address", type=str, default=None)
 @click.argument("state", type=click.Choice(["off", "on_full", "reset"]))
 async def set_display_state(address: str, state: str) -> None:
@@ -1782,14 +1650,14 @@ async def set_display_state(address: str, state: str) -> None:
     payload = bytearray()
     payload.append(state_mapping[state])
     await send_cmd(
-        SERVICE.SET_DISPLAY_STATE,
+        ServiceCommand.SET_DISPLAY_STATE,
         payload,
         address,
         handle_rx=check_success_rx,
     )
 
 
-@main.command(SERVICE.GET_DISPLAY_STATE.command)
+@main.command(ServiceCommand.GET_DISPLAY_STATE.command)
 @click.option("-a", "--address", type=str, default=None)
 async def get_display_state(address: str) -> None:
     def handle_msg_rx(_: BleakGATTCharacteristic, data: bytearray) -> None:
@@ -1806,84 +1674,114 @@ async def get_display_state(address: str) -> None:
 
     payload = bytearray()
     await send_cmd(
-        SERVICE.GET_DISPLAY_STATE,
+        ServiceCommand.GET_DISPLAY_STATE,
         payload,
         address,
         handle_rx=handle_msg_rx,
     )
 
 
-@main.command(SERVICE.TURN_ON_PORT.command)
-@click.argument("port", type=click.Choice(PORTS, case_sensitive=False))
+@main.command(ServiceCommand.GET_DISPLAY_ROTATION.command)
 @click.option("-a", "--address", type=str, default=None)
-async def turn_on_port(port: str, address: str) -> None:
-    await send_cmd(
-        SERVICE.TURN_ON_PORT,
-        bytearray([PORTS.index(port) & 0xFF]),
-        address,
-        handle_rx=check_success_rx,
-    )
-
-
-@main.command(SERVICE.TURN_OFF_PORT.command)
-@click.argument("port", type=click.Choice(PORTS, case_sensitive=False))
-@click.option("-a", "--address", type=str, default=None)
-async def turn_off_port(port: str, address: str) -> None:
-    await send_cmd(
-        SERVICE.TURN_OFF_PORT,
-        bytearray([PORTS.index(port) & 0xFF]),
-        address,
-        handle_rx=check_success_rx,
-    )
-
-
-@main.command(SERVICE.GET_DEVICE_MODEL.command)
-@click.option("-a", "--address", type=str, default=None)
-async def get_device_model(address: str) -> None:
+async def get_display_rotation(address: str) -> None:
     def handle_msg_rx(_: BleakGATTCharacteristic, data: bytearray) -> None:
         msg = Message.from_bytes(data)
-        click.secho(f"Received: {binascii.hexlify(data)} => {msg}")
-        if abs(msg.header.service) != SERVICE.GET_DEVICE_MODEL:
+        if msg.header.size != 2:
             return
-        if msg.header.size < 2:
-            return
-
-        status, model = struct.unpack(f"<B{msg.header.size - 1}s", msg.payload)
+        status, rotation = struct.unpack("<BB", msg.payload)
         if status != 0:
-            click.secho(f"Error getting device model: {status}", err=True, fg="red")
+            click.secho(f"Error getting display rotation: {status}", err=True, fg="red")
             return
 
-        click.secho(f"Device model: {model.decode('utf-8')}", fg="green")
+        rotation_mapping = {0: "0°", 1: "90°", 2: "180°", 3: "270°"}
+        click.secho(
+            f"Display rotation: {rotation}({rotation_mapping.get(rotation)})",
+            fg="green",
+        )
 
     await send_cmd(
-        SERVICE.GET_DEVICE_MODEL,
+        ServiceCommand.GET_DISPLAY_ROTATION,
         bytearray(),
         address,
         handle_rx=handle_msg_rx,
     )
 
 
-@main.command(SERVICE.PUSH_LICENSE.command)
+@main.command(ServiceCommand.SET_DISPLAY_ROTATION.command)
+@click.argument("rotation", type=click.Choice(["0", "90", "180", "270"]))
 @click.option("-a", "--address", type=str, default=None)
-@click.argument("license_file", type=click.Path(exists=True), nargs=1)
-async def push_license(address: str, license_file: str) -> None:
-    payload = bytearray()
-    payload.extend(pathlib.Path(license_file).read_bytes())
+async def set_display_rotation(rotation: str, address: str) -> None:
+    rotation_mapping = {"0": 0, "90": 1, "180": 2, "270": 3}
+    payload = bytearray([rotation_mapping[rotation]])
     await send_cmd(
-        SERVICE.PUSH_LICENSE,
+        ServiceCommand.SET_DISPLAY_ROTATION,
         payload,
         address,
         handle_rx=check_success_rx,
     )
 
 
-@main.command(SERVICE.GET_BLE_RSSI.command)
+@main.command(ServiceCommand.SWITCH_FPGA_FIRMWARE.command)
+@click.argument("firmware_type", type=click.Choice(["uart", "gpu"]))
+@click.option("-a", "--address", type=str, default=None)
+async def switch_fpga_firmware(firmware_type: str, address: str) -> None:
+    """Switch FPGA firmware between UART switcher and GPU variants.
+
+    Args:
+        firmware_type: "uart" to switch to UART switcher firmware (0x00)
+                      "gpu" to switch to GPU firmware (not supported yet)
+    """
+    firmware_mapping = {"uart": 0, "gpu": 1}
+    payload = bytearray([firmware_mapping[firmware_type]])
+    await send_cmd(ServiceCommand.SWITCH_FPGA_FIRMWARE, payload, address)
+
+
+@main.command(ServiceCommand.TURN_ON_PORT.command)
+@click.argument("port", type=click.Choice(PORTS, case_sensitive=False))
+@click.option("-a", "--address", type=str, default=None)
+async def turn_on_port(port: str, address: str) -> None:
+    await send_cmd(
+        ServiceCommand.TURN_ON_PORT,
+        bytearray([PORTS.index(port) & 0xFF]),
+        address,
+        handle_rx=check_success_rx,
+    )
+
+
+@main.command(ServiceCommand.TURN_OFF_PORT.command)
+@click.argument("port", type=click.Choice(PORTS, case_sensitive=False))
+@click.option("-a", "--address", type=str, default=None)
+async def turn_off_port(port: str, address: str) -> None:
+    await send_cmd(
+        ServiceCommand.TURN_OFF_PORT,
+        bytearray([PORTS.index(port) & 0xFF]),
+        address,
+        handle_rx=check_success_rx,
+    )
+
+
+@main.command(ServiceCommand.BLE_FORWARD_PORT.command)
+@click.argument("port", type=click.Choice(PORTS, case_sensitive=False))
+@click.argument("command", type=click.IntRange(0, 0x10000, max_open=True))
+@click.argument("data", type=str, default="")
+@click.option("-a", "--address", type=str, default=None)
+async def forward_port(port: str, command: int, data: str, address: str) -> None:
+    payload = bytearray()
+    payload.append(PORTS.index(port) & 0xFF)
+    payload.append(command & 0xFF)
+    payload.append((command >> 8) & 0xFF)
+    if data:
+        payload.extend(bytes.fromhex(data))
+    await send_cmd(ServiceCommand.BLE_FORWARD_PORT, payload, address)
+
+
+@main.command(ServiceCommand.GET_BLE_RSSI.command)
 @click.option("-a", "--address", type=str, default=None)
 async def get_ble_rssi(address: str) -> None:
     def handle_msg_rx(_: BleakGATTCharacteristic, data: bytearray) -> None:
         msg = Message.from_bytes(data)
         click.secho(f"Received: {binascii.hexlify(data)} => {msg}")
-        if abs(msg.header.service) != SERVICE.GET_BLE_RSSI:
+        if abs(msg.header.service) != ServiceCommand.GET_BLE_RSSI:
             return
         if msg.header.size < 2:
             return
@@ -1895,10 +1793,35 @@ async def get_ble_rssi(address: str) -> None:
 
         click.secho(f"RSSI: {rssi}", fg="green")
 
-    await send_cmd(SERVICE.GET_BLE_RSSI, bytearray(), address, handle_rx=handle_msg_rx)
+    await send_cmd(
+        ServiceCommand.GET_BLE_RSSI, bytearray(), address, handle_rx=handle_msg_rx
+    )
 
 
-@main.command(SERVICE.SET_STATIC_ALLOCATOR.command)
+@main.command(ServiceCommand.GET_BLE_MTU.command)
+@click.option("-a", "--address", type=str, default=None)
+async def get_ble_mtu(address: str) -> None:
+    def handle_msg_rx(_: BleakGATTCharacteristic, data: bytearray) -> None:
+        msg = Message.from_bytes(data)
+        click.secho(f"Received: {binascii.hexlify(data)} => {msg}")
+        if abs(msg.header.service) != ServiceCommand.GET_BLE_MTU:
+            return
+        if msg.header.size < 2:
+            return
+
+        status, mtu = struct.unpack("<BH", msg.payload)
+        if status != 0:
+            click.secho(f"Error getting ble mtu: {status}", err=True, fg="red")
+            return
+
+        click.secho(f"MTU: {mtu}", fg="green")
+
+    await send_cmd(
+        ServiceCommand.GET_BLE_MTU, bytearray(), address, handle_rx=handle_msg_rx
+    )
+
+
+@main.command(ServiceCommand.SET_STATIC_ALLOCATOR.command)
 @click.argument("identifier", type=click.IntRange(0, 0xFFFF))
 @click.argument("version", type=click.IntRange(0, 0xFF))
 @click.argument("file", type=click.Path(exists=True, readable=True), nargs=1)
@@ -1916,14 +1839,14 @@ async def set_static_allocator(
         for n in allocation:
             payload.extend(struct.pack("<H", n))
     await send_cmd(
-        SERVICE.SET_STATIC_ALLOCATOR,
+        ServiceCommand.SET_STATIC_ALLOCATOR,
         payload,
         address,
         handle_rx=check_success_rx,
     )
 
 
-@main.command(SERVICE.GET_STATIC_ALLOCATOR.command)
+@main.command(ServiceCommand.GET_STATIC_ALLOCATOR.command)
 @click.option("-a", "--address", type=str, default=None)
 async def get_static_allocator(address: str) -> None:
     def handle_msg_rx(_: BleakGATTCharacteristic, data: bytearray) -> None:
@@ -1936,7 +1859,7 @@ async def get_static_allocator(address: str) -> None:
         if status != 0:
             click.secho(
                 "Failed to perform service {}. Status: {}".format(
-                    SERVICE(abs(msg.header.service)).name, status
+                    ServiceCommand(abs(msg.header.service)).name, status
                 ),
                 err=True,
                 fg="red",
@@ -1946,7 +1869,7 @@ async def get_static_allocator(address: str) -> None:
         click.secho(f"identifier: {identifier}, version: {version}", fg="green")
 
     await send_cmd(
-        SERVICE.GET_STATIC_ALLOCATOR,
+        ServiceCommand.GET_STATIC_ALLOCATOR,
         bytearray(),
         address,
         handle_rx=handle_msg_rx,
@@ -1955,7 +1878,6 @@ async def get_static_allocator(address: str) -> None:
 
 async def set_port_config_internal(
     ports: typing.Tuple[str],
-    version: int,
     tfcp: bool,
     pe: bool,
     qc2p0: bool,
@@ -1975,11 +1897,10 @@ async def set_port_config_internal(
     pdepr: bool,
     pdrpi: bool,
     pd_hvpps: bool,
+    prohibit_syncing: bool,
     address: str,
 ) -> None:
-    default_value = [version, 0, 0]
-    if version == 1:
-        default_value = [version, 0, 0, 0]
+    default_value = [1, 0, 0, 0, 0]
     payload = bytearray()
     set_ports = 0
     for i, port in enumerate(PORTS):
@@ -1988,7 +1909,7 @@ async def set_port_config_internal(
             continue
         set_ports |= 1 << i
         config = PortConfigInternal(
-            version,
+            1,
             tfcp,
             pe,
             qc2p0,
@@ -2013,15 +1934,17 @@ async def set_port_config_internal(
     for _ in range(8 - len(PORTS)):
         payload.extend(default_value)
     payload.insert(0, set_ports)
+    if prohibit_syncing:
+        payload.append(1)
     await send_cmd(
-        SERVICE.SET_PORT_CONFIG if version == 0 else SERVICE.SET_PORT_CONFIG1,
+        ServiceCommand.SET_PORT_CONFIG,
         payload,
         address,
         handle_rx=check_success_rx,
     )
 
 
-async def get_port_config_internal(version: int, address: str) -> None:
+async def get_port_config_internal(address: str) -> None:
     def handle_msg_rx(_: BleakGATTCharacteristic, data: bytearray) -> None:
         msg = Message.from_bytes(data)
         if msg.header.size == 1:
@@ -2032,100 +1955,38 @@ async def get_port_config_internal(version: int, address: str) -> None:
         if status != 0:
             click.secho(
                 "Failed to perform service {}. Status: {}".format(
-                    SERVICE(abs(msg.header.service)).name, status
+                    ServiceCommand(abs(msg.header.service)).name, status
                 ),
                 err=True,
                 fg="red",
             )
             return
+
         offset = 1
-        size = 3
-        if version == 1:
-            size = 4
+        size = 5
         for i in range(5):
             config = PortConfigInternal.deserialize(msg.payload[offset : offset + size])
             click.secho(
-                f"port {i}: {msg.payload[offset:offset+size].hex()}", fg="green"
+                f"port {i}: {msg.payload[offset : offset + size].hex()}", fg="green"
             )
             click.secho(f"{config}", fg="green")
             offset += size
 
     await send_cmd(
-        SERVICE.GET_PORT_CONFIG if version == 0 else SERVICE.GET_PORT_CONFIG1,
-        bytearray() if version == 0 else bytearray([version]),
+        ServiceCommand.GET_PORT_CONFIG,
+        bytearray([1]),
         address,
         handle_rx=handle_msg_rx,
     )
 
 
-@main.command(SERVICE.SET_PORT_CONFIG.command)
-@click.argument("ports", type=click.Choice(PORTS, case_sensitive=False), nargs=-1)
-@click.option("--tfcp", is_flag=True, default=False)
-@click.option("--pe", is_flag=True, default=False)
-@click.option("--qc2p0", is_flag=True, default=False)
-@click.option("--qc3p0", is_flag=True, default=False)
-@click.option("--qc3plus", is_flag=True, default=False)
-@click.option("--afc", is_flag=True, default=False)
-@click.option("--fcp", is_flag=True, default=False)
-@click.option("--hvscp", is_flag=True, default=False)
-@click.option("--lvscp", is_flag=True, default=False)
-@click.option("--sfcp", is_flag=True, default=False)
-@click.option("--apple", is_flag=True, default=False)
-@click.option("--samsung", is_flag=True, default=False)
-@click.option("--ufcs", is_flag=True, default=False)
-@click.option("--pd", is_flag=True, default=False)
-@click.option("-a", "--address", type=str, default=None)
-async def set_port_config(
-    ports: typing.Tuple[str],
-    tfcp: bool,
-    pe: bool,
-    qc2p0: bool,
-    qc3p0: bool,
-    qc3plus: bool,
-    afc: bool,
-    fcp: bool,
-    hvscp: bool,
-    lvscp: bool,
-    sfcp: bool,
-    apple: bool,
-    samsung: bool,
-    ufcs: bool,
-    pd: bool,
-    address: str,
-) -> None:
-    await set_port_config_internal(
-        ports,
-        0,
-        tfcp,
-        pe,
-        qc2p0,
-        qc3p0,
-        qc3plus,
-        afc,
-        fcp,
-        hvscp,
-        lvscp,
-        sfcp,
-        apple,
-        samsung,
-        ufcs,
-        pd,
-        pdcompat=pd and False,
-        pd_lvpps=pd and True,
-        pdepr=pd and True,
-        pdrpi=pd and True,
-        pd_hvpps=pd and True,
-        address=address,
-    )
-
-
-@main.command(SERVICE.GET_PORT_CONFIG.command)
+@main.command(ServiceCommand.GET_PORT_CONFIG.command)
 @click.option("-a", "--address", type=str, default=None)
 async def get_port_config(address: str) -> None:
-    await get_port_config_internal(0, address)
+    await get_port_config_internal(address)
 
 
-@main.command(SERVICE.SET_PORT_CONFIG1.command)
+@main.command(ServiceCommand.SET_PORT_CONFIG.command)
 @click.argument("ports", type=click.Choice(PORTS, case_sensitive=False), nargs=-1)
 @click.option("--tfcp", is_flag=True, default=False)
 @click.option("--pe", is_flag=True, default=False)
@@ -2147,8 +2008,14 @@ async def get_port_config(address: str) -> None:
 @click.option("--pdrpi", is_flag=True, default=False)
 @click.option("--pd_lvpps", is_flag=True, default=False)
 @click.option("--pd_hvpps", is_flag=True, default=False)
+@click.option(
+    "--prohibit-syncing",
+    is_flag=True,
+    default=False,
+    help="Prohibit syncing configuration to cloud",
+)
 @click.option("-a", "--address", type=str, default=None)
-async def set_port_config1(
+async def set_port_config(
     ports: typing.Tuple[str],
     tfcp: bool,
     pe: bool,
@@ -2170,11 +2037,11 @@ async def set_port_config1(
     pdrpi: bool,
     pd_lvpps: bool,
     pd_hvpps: bool,
+    prohibit_syncing: bool,
     address: str,
 ) -> None:
     await set_port_config_internal(
         ports,
-        1,
         tfcp,
         pe,
         qc2p0,
@@ -2194,14 +2061,9 @@ async def set_port_config1(
         pdepr,
         pdrpi,
         pd_hvpps,
+        prohibit_syncing,
         address,
     )
-
-
-@main.command(SERVICE.GET_PORT_CONFIG1.command)
-@click.option("-a", "--address", type=str, default=None)
-async def get_port_config1(address: str) -> None:
-    await get_port_config_internal(1, address)
 
 
 @dataclass
@@ -2235,7 +2097,7 @@ class CompatibilitySettings:
         )
 
 
-@main.command(SERVICE.SET_PORT_COMPATIBILITY_SETTINGS.command)
+@main.command(ServiceCommand.SET_PORT_COMPATIBILITY_SETTINGS.command)
 @click.option("--tfcp", is_flag=True, default=False)
 @click.option("--fcp", is_flag=True, default=False)
 @click.option("--ufcs", is_flag=True, default=False)
@@ -2247,14 +2109,14 @@ async def set_port_compatibility_settings(
 ) -> None:
     settings = CompatibilitySettings(tfcp, fcp, ufcs, hvscp, lvscp)
     await send_cmd(
-        SERVICE.SET_PORT_COMPATIBILITY_SETTINGS,
+        ServiceCommand.SET_PORT_COMPATIBILITY_SETTINGS,
         settings.serialize(),
         address,
         handle_rx=check_success_rx,
     )
 
 
-@main.command(SERVICE.GET_PORT_COMPATIBILITY_SETTINGS.command)
+@main.command(ServiceCommand.GET_PORT_COMPATIBILITY_SETTINGS.command)
 @click.option("-a", "--address", type=str, default=None)
 async def get_port_compatibility_settings(address: str) -> None:
     def handle_msg_rx(_: BleakGATTCharacteristic, data: bytearray) -> None:
@@ -2267,7 +2129,7 @@ async def get_port_compatibility_settings(address: str) -> None:
         if status != 0:
             click.secho(
                 "Failed to perform service {}. Status: {}".format(
-                    SERVICE(abs(msg.header.service)).name, status
+                    ServiceCommand(abs(msg.header.service)).name, status
                 ),
                 err=True,
                 fg="red",
@@ -2277,14 +2139,14 @@ async def get_port_compatibility_settings(address: str) -> None:
         click.secho(f"Settings: {settings}", fg="green")
 
     await send_cmd(
-        SERVICE.GET_PORT_COMPATIBILITY_SETTINGS,
+        ServiceCommand.GET_PORT_COMPATIBILITY_SETTINGS,
         bytearray(),
         address,
         handle_rx=handle_msg_rx,
     )
 
 
-@main.command(SERVICE.SET_TEMPERATURE_MODE.command)
+@main.command(ServiceCommand.SET_TEMPERATURE_MODE.command)
 @click.option("-a", "--address", type=str, default=None)
 @click.argument(
     "mode",
@@ -2300,14 +2162,14 @@ async def set_temperature_mode(mode: str, address: str) -> None:
         case _:
             raise ValueError("Invalid mode: {}".format(mode))
     await send_cmd(
-        SERVICE.SET_TEMPERATURE_MODE,
+        ServiceCommand.SET_TEMPERATURE_MODE,
         bytearray([mode_byte]),
         address,
         handle_rx=check_success_rx,
     )
 
 
-@main.command(SERVICE.SET_TEMPORARY_ALLOCATOR.command)
+@main.command(ServiceCommand.SET_TEMPORARY_ALLOCATOR.command)
 @click.option("-a", "--address", type=str, default=None)
 @click.argument("power_allocation", type=click.IntRange(0, 256), nargs=5)
 async def set_temporary_allocator(
@@ -2316,36 +2178,36 @@ async def set_temporary_allocator(
     payload = bytearray()
     payload.extend(power_allocation)
     await send_cmd(
-        SERVICE.SET_TEMPORARY_ALLOCATOR,
+        ServiceCommand.SET_TEMPORARY_ALLOCATOR,
         payload,
         address,
         handle_rx=check_success_rx,
     )
 
 
-@main.command(SERVICE.START_TELEMETRY_STREAM.command)
+@main.command(ServiceCommand.START_TELEMETRY_STREAM.command)
 @click.option("-a", "--address", type=str, default=None)
 async def start_telemetry_stream(address: str) -> None:
     await send_cmd(
-        SERVICE.START_TELEMETRY_STREAM,
+        ServiceCommand.START_TELEMETRY_STREAM,
         bytearray(),
         address,
         handle_rx=check_success_rx,
     )
 
 
-@main.command(SERVICE.STOP_TELEMETRY_STREAM.command)
+@main.command(ServiceCommand.STOP_TELEMETRY_STREAM.command)
 @click.option("-a", "--address", type=str, default=None)
 async def stop_telemetry_stream(address: str) -> None:
     await send_cmd(
-        SERVICE.STOP_TELEMETRY_STREAM,
+        ServiceCommand.STOP_TELEMETRY_STREAM,
         bytearray(),
         address,
         handle_rx=check_success_rx,
     )
 
 
-@main.command(SERVICE.GET_DEVICE_INFO.command)
+@main.command(ServiceCommand.GET_DEVICE_INFO.command)
 @click.option("-a", "--address", type=str, default=None)
 async def get_device_info(address: str) -> None:
     def handle_msg_rx(_: BleakGATTCharacteristic, data: bytearray) -> None:
@@ -2359,7 +2221,145 @@ async def get_device_info(address: str) -> None:
         # click.secho(f"Device info: {msg.payload}")
 
     await send_cmd(
-        SERVICE.GET_DEVICE_INFO,
+        ServiceCommand.GET_DEVICE_INFO,
+        bytearray(),
+        address,
+        handle_rx=handle_msg_rx,
+    )
+
+
+@main.command(ServiceCommand.SUBSCRIBE_PD_PCAP_STREAMING.command)
+@click.argument("port", type=click.Choice(PORTS, case_sensitive=False))
+@click.argument("subscribe", type=str, callback=cast_to_bool)
+@click.option("-a", "--address", type=str, default=None)
+async def subscribe_pd_pcap_streaming(port: str, subscribe: bool, address: str) -> None:
+    await send_cmd(
+        ServiceCommand.SUBSCRIBE_PD_PCAP_STREAMING,
+        bytearray([PORTS.index(port) & 0xFF, int(subscribe)]),
+        address=address,
+    )
+
+
+@main.command(ServiceCommand.SET_PORT_TYPE.command)
+@click.argument("port", type=click.Choice(PORTS, case_sensitive=False))
+@click.argument("type", type=click.Choice(["A", "C"], case_sensitive=False))
+@click.option("-a", "--address", type=str, default=None)
+async def set_port_type(port: str, type: str, address: str) -> None:
+    port_type = PortType[f"PORT_{type.upper()}"].value
+    await send_cmd(
+        ServiceCommand.SET_PORT_TYPE,
+        bytearray([PORTS.index(port), port_type]),
+        address=address,
+    )
+
+
+@main.command(ServiceCommand.SET_DISPLAY_TEST.command)
+@click.argument(
+    "test_kind",
+    type=click.Choice(
+        [
+            t.name
+            for t in display_test.DisplayTestKind
+            if t != display_test.DisplayTestKind.TEST_AUTO_ONCE
+        ],
+        case_sensitive=False,
+    ),
+)
+@click.option("-l", "--lightness", type=click.IntRange(0, 100), default=None)
+@click.option(
+    "-s",
+    "--screen",
+    type=click.Choice(
+        [
+            s.name.upper().replace("TEST_SCREEN_", "")
+            for s in display_test.DisplayTestScreen
+        ],
+        case_sensitive=False,
+    ),
+    default="DEFAULT",
+)
+@click.option(
+    "-d",
+    "--duration",
+    type=click.IntRange(0, 255),
+    default=None,
+    help="Duration in seconds for the auto test",
+)
+@click.option(
+    "--once",
+    is_flag=True,
+    default=False,
+    help="Run auto test once and stop at default screen (applies to TEST_AUTO)",
+)
+@click.option("-a", "--address", type=str, default=None)
+async def set_display_test(
+    address: str,
+    test_kind: str,
+    lightness: int | None = None,
+    screen: str = "DEFAULT",
+    duration: int | None = None,
+    once: bool = False,
+) -> None:
+    event = display_test.DisplayTestEvent(
+        kind=display_test.DisplayTestKind[test_kind.upper()],
+    )
+    match event.kind:
+        case display_test.DisplayTestKind.TEST_LIGHTNESS:
+            if lightness is None:
+                raise click.UsageError(
+                    "The --lightness option is required for this test"
+                )
+            event.param = lightness
+        case display_test.DisplayTestKind.TEST_SCREEN:
+            event.param = display_test.DisplayTestScreen[
+                "TEST_SCREEN_" + screen.upper()
+            ].value
+        case display_test.DisplayTestKind.TEST_AUTO:
+            if once:
+                event.kind = display_test.DisplayTestKind.TEST_AUTO_ONCE
+            if duration:
+                event.param = duration
+        case display_test.DisplayTestKind.TEST_AUTO_ONCE:
+            if duration:
+                event.param = duration
+        case _:
+            pass
+
+    await send_cmd(
+        ServiceCommand.SET_DISPLAY_TEST,
+        event.serialize(),
+        address,
+        handle_rx=check_success_rx,
+    )
+
+
+@main.command(ServiceCommand.GET_PORTS_VIN.command)
+@click.option("-a", "--address", type=str, default=None)
+async def get_ports_vin(address: str) -> None:
+    def handle_msg_rx(_: BleakGATTCharacteristic, data: bytearray) -> None:
+        msg = Message.from_bytes(data)
+        click.secho(f"Received: {binascii.hexlify(data)} => {msg}")
+        if abs(msg.header.service) != ServiceCommand.GET_PORTS_VIN:
+            return
+        if msg.header.size < 2:
+            return
+
+        status = struct.unpack_from("<B", msg.payload)[0]
+        if status != 0:
+            click.secho(
+                "Something went wrong, please check the ESP32 logs",
+                err=True,
+                fg="red",
+            )
+            return
+
+        port_count = struct.unpack_from("<B", msg.payload, 1)[0]
+        for i in range(port_count):
+            vin = struct.unpack_from("<H", msg.payload, 2 + i * 2)[0]
+            click.secho(f"Port {i}: VIN = {vin / 1000.0:.2f}V", fg="green")
+
+    await send_cmd(
+        ServiceCommand.GET_PORTS_VIN,
         bytearray(),
         address,
         handle_rx=handle_msg_rx,
