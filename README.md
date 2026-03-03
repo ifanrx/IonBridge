@@ -2,6 +2,12 @@
 
 This repository contains the open-source power management module for the power adapter developed by ifanr / CANDYSIGN.
 
+## Crowdfunding
+
+HummingKit is now live on Crowd Supply! Back us and get your own kit:
+
+[HummingKit](https://www.crowdsupply.com/candysign/hummingkit)
+
 ## 许可
 
 请参阅 LICENSE 文件以了解更多详细信息。
